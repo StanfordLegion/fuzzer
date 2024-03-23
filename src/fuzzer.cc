@@ -25,13 +25,13 @@ using namespace Legion;
 
 enum TaskIDs {
   VOID_LEAF_TASK_ID,
-  INT_LEAF_TASK_ID,
+  INT64_LEAF_TASK_ID,
   VOID_INNER_TASK_ID,
-  INT_INNER_TASK_ID,
+  INT64_INNER_TASK_ID,
   VOID_REPLICABLE_LEAF_TASK_ID,
-  INT_REPLICABLE_LEAF_TASK_ID,
+  INT64_REPLICABLE_LEAF_TASK_ID,
   VOID_REPLICABLE_INNER_TASK_ID,
-  INT_REPLICABLE_INNER_TASK_ID,
+  INT64_REPLICABLE_INNER_TASK_ID,
   TOP_LEVEL_TASK_ID,
 };
 
@@ -153,32 +153,34 @@ static uint64_t uniform_range(uint64_t seed, uint64_t sequence_number, uint64_t 
 void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
                Runtime *runtime) {}
 
-int int_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-             Runtime *runtime) {
+int64_t int64_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
+                   Context ctx, Runtime *runtime) {
   return 1;
 }
 
 void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
                 Runtime *runtime) {}
 
-int int_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-              Runtime *runtime) {
+int64_t int64_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
+                    Context ctx, Runtime *runtime) {
   return 2;
 }
 
 void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
                           Context ctx, Runtime *runtime) {}
 
-int int_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
-                        Context ctx, Runtime *runtime) {
+int64_t int64_replicable_leaf(const Task *task,
+                              const std::vector<PhysicalRegion> &regions, Context ctx,
+                              Runtime *runtime) {
   return 3;
 }
 
 void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
                            Context ctx, Runtime *runtime) {}
 
-int int_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
-                         Context ctx, Runtime *runtime) {
+int64_t int64_replicable_inner(const Task *task,
+                               const std::vector<PhysicalRegion> &regions, Context ctx,
+                               Runtime *runtime) {
   return 4;
 }
 
@@ -205,6 +207,8 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     runtime->fill_field<uint64_t>(ctx, tree, tree, field, field);
   }
 
+  std::vector<Future> futures;
+
   const uint64_t seed = config.initial_seed;
   uint64_t seq = 0;
   for (uint64_t op = 0; op < config.num_ops; ++op) {
@@ -212,18 +216,23 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 
     // Step 1. Choose a random task to run.
     TaskID task_id;
+    bool has_value;
     switch (uniform_range(seed, seq++, 0, 4) & 3) {
       case 0: {
         task_id = VOID_LEAF_TASK_ID;
+        has_value = false;
       } break;
       case 1: {
         task_id = VOID_INNER_TASK_ID;
+        has_value = false;
       } break;
       case 2: {
-        task_id = INT_LEAF_TASK_ID;
+        task_id = INT64_LEAF_TASK_ID;
+        has_value = true;
       } break;
       case 3: {
-        task_id = INT_INNER_TASK_ID;
+        task_id = INT64_INNER_TASK_ID;
+        has_value = true;
       } break;
     }
     LOG_ONCE(log_fuzz.info() << "  Task ID: " << task_id);
@@ -238,12 +247,40 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     Rect<1> domain((Point<1>(range_min)), (Point<1>(range_max)));
     LOG_ONCE(log_fuzz.info() << "  Launch domain: " << domain);
 
-    // Step 3. Choose fields.
+    // Step 3. Choose scalar reduction.
+    ReductionOpID scalar_redop = LEGION_REDOP_LAST;
+    if (has_value) {
+      switch (uniform_range(seed, seq++, 0, 4) & 3) {
+        case 0: {
+          scalar_redop = LEGION_REDOP_SUM_INT64;
+        } break;
+        case 1: {
+          scalar_redop = LEGION_REDOP_PROD_INT64;
+        } break;
+        case 2: {
+          scalar_redop = LEGION_REDOP_MIN_INT64;
+        } break;
+        case 3: {
+          scalar_redop = LEGION_REDOP_MAX_INT64;
+        } break;
+      }
+      LOG_ONCE(log_fuzz.info() << "  Scalar redop: " << scalar_redop);
+    }
+
+    // Step 4. Choose whether scalar reductions should be ordered.
+    bool scalar_ordered = uniform_range(seed, seq++, 0, 2) == 0;
+    LOG_ONCE(log_fuzz.info() << "  Scalar reduction is ordered: " << scalar_ordered);
+
+    // Step 5. Choose whether to elide future return.
+    bool elide_return = uniform_range(seed, seq++, 0, 2) == 0;
+    LOG_ONCE(log_fuzz.info() << "  Elide future return: " << elide_return);
+
+    // Step 6. Choose fields.
     std::vector<FieldID> fields;
     {
       uint64_t field_set =
           uniform_range(seed, seq++, 0, 1 << config.region_tree_num_fields);
-      LOG_ONCE(log_fuzz.info() << "  Field set: " << field_set);
+      LOG_ONCE(log_fuzz.info() << "  Field set: 0x" << std::hex << field_set);
       for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
         if ((field_set & (1 << field)) != 0) {
           fields.push_back(field);
@@ -251,17 +288,72 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
       }
     }
 
-    // Step 4. Choose the launch type.
+    // Step 7. Choose privilege.
+    PrivilegeMode privilege;
+    switch (uniform_range(seed, seq++, 0, 4) & 3) {
+      case 0: {
+        privilege = LEGION_READ_ONLY;
+      } break;
+      case 1: {
+        privilege = LEGION_READ_WRITE;
+      } break;
+      case 2: {
+        privilege = LEGION_WRITE_DISCARD;
+      } break;
+      case 3: {
+        privilege = LEGION_REDUCE;
+      } break;
+    }
+    LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
+
+    // Step 3. Choose reduction.
+    ReductionOpID redop = LEGION_REDOP_LAST;
+    if (privilege == LEGION_REDUCE) {
+      switch (uniform_range(seed, seq++, 0, 4) & 3) {
+        case 0: {
+          redop = LEGION_REDOP_SUM_INT64;
+        } break;
+        case 1: {
+          redop = LEGION_REDOP_PROD_INT64;
+        } break;
+        case 2: {
+          redop = LEGION_REDOP_MIN_INT64;
+        } break;
+        case 3: {
+          redop = LEGION_REDOP_MAX_INT64;
+        } break;
+      }
+      LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop);
+    }
+
+    // Step 7. Choose the launch type.
     uint64_t launch_type = uniform_range(seed, seq++, 0, 2);
     if (launch_type == 0) {
       LOG_ONCE(log_fuzz.info() << "  Launch type: index space");
       IndexTaskLauncher launcher(task_id, domain, TaskArgument(), ArgumentMap());
       if (!fields.empty()) {
-        launcher.add_region_requirement(
-            RegionRequirement(lpart, 0, std::set<FieldID>(fields.begin(), fields.end()),
-                              fields, READ_WRITE, EXCLUSIVE, tree));
+        if (privilege == LEGION_REDUCE) {
+          launcher.add_region_requirement(
+              RegionRequirement(lpart, 0, std::set<FieldID>(fields.begin(), fields.end()),
+                                fields, redop, EXCLUSIVE, tree));
+        } else {
+          launcher.add_region_requirement(
+              RegionRequirement(lpart, 0, std::set<FieldID>(fields.begin(), fields.end()),
+                                fields, privilege, EXCLUSIVE, tree));
+        }
       }
-      runtime->execute_index_space(ctx, launcher);
+      if (elide_return) {
+        launcher.elide_future_return = true;
+      }
+      if (has_value) {
+        Future result =
+            runtime->execute_index_space(ctx, launcher, scalar_redop, scalar_ordered);
+        if (!elide_return) {
+          futures.push_back(result);
+        }
+      } else {
+        runtime->execute_index_space(ctx, launcher);
+      }
     } else {
       LOG_ONCE(log_fuzz.info() << "  Launch type: individual tasks");
       for (uint64_t point = range_min; point <= range_max; ++point) {
@@ -271,14 +363,35 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
         launcher.sharding_space = launch_space;
         if (!fields.empty()) {
           LogicalRegion subregion = runtime->get_logical_subregion_by_color(lpart, point);
-          launcher.add_region_requirement(RegionRequirement(
-              subregion, std::set<FieldID>(fields.begin(), fields.end()), fields,
-              READ_WRITE, EXCLUSIVE, tree));
+          if (privilege == LEGION_REDUCE) {
+            launcher.add_region_requirement(RegionRequirement(
+                subregion, std::set<FieldID>(fields.begin(), fields.end()), fields, redop,
+                EXCLUSIVE, tree));
+          } else {
+            launcher.add_region_requirement(RegionRequirement(
+                subregion, std::set<FieldID>(fields.begin(), fields.end()), fields,
+                privilege, EXCLUSIVE, tree));
+          }
         }
-        runtime->execute_task(ctx, launcher);
+        if (elide_return) {
+          launcher.elide_future_return = true;
+        }
+        if (has_value) {
+          Future result = runtime->execute_task(ctx, launcher);
+          if (!elide_return) {
+            futures.push_back(result);
+          }
+        } else {
+          runtime->execute_task(ctx, launcher);
+        }
         runtime->destroy_index_space(ctx, launch_space);
       }
     }
+  }
+
+  for (Future &future : futures) {
+    int64_t result = future.get_result<int64_t>();
+    LOG_ONCE(log_fuzz.info() << "Future result: " << result);
   }
 
   runtime->destroy_logical_region(ctx, tree);
@@ -304,10 +417,10 @@ int main(int argc, char **argv) {
   }
 
   {
-    TaskVariantRegistrar registrar(INT_LEAF_TASK_ID, "int_leaf");
+    TaskVariantRegistrar registrar(INT64_LEAF_TASK_ID, "int64_leaf");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_leaf();
-    Runtime::preregister_task_variant<int, int_leaf>(registrar, "int_leaf");
+    Runtime::preregister_task_variant<int64_t, int64_leaf>(registrar, "int64_leaf");
   }
 
   {
@@ -318,10 +431,10 @@ int main(int argc, char **argv) {
   }
 
   {
-    TaskVariantRegistrar registrar(INT_INNER_TASK_ID, "int_inner");
+    TaskVariantRegistrar registrar(INT64_INNER_TASK_ID, "int64_inner");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_inner();
-    Runtime::preregister_task_variant<int, int_inner>(registrar, "int_inner");
+    Runtime::preregister_task_variant<int64_t, int64_inner>(registrar, "int64_inner");
   }
 
   {
@@ -334,12 +447,13 @@ int main(int argc, char **argv) {
   }
 
   {
-    TaskVariantRegistrar registrar(INT_REPLICABLE_LEAF_TASK_ID, "int_replicable_leaf");
+    TaskVariantRegistrar registrar(INT64_REPLICABLE_LEAF_TASK_ID,
+                                   "int64_replicable_leaf");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_leaf();
     registrar.set_replicable();
-    Runtime::preregister_task_variant<int, int_replicable_leaf>(registrar,
-                                                                "int_replicable_leaf");
+    Runtime::preregister_task_variant<int64_t, int64_replicable_leaf>(
+        registrar, "int64_replicable_leaf");
   }
 
   {
@@ -353,12 +467,13 @@ int main(int argc, char **argv) {
   }
 
   {
-    TaskVariantRegistrar registrar(INT_REPLICABLE_INNER_TASK_ID, "int_replicable_inner");
+    TaskVariantRegistrar registrar(INT64_REPLICABLE_INNER_TASK_ID,
+                                   "int64_replicable_inner");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_inner();
     registrar.set_replicable();
-    Runtime::preregister_task_variant<int, int_replicable_inner>(registrar,
-                                                                 "int_replicable_inner");
+    Runtime::preregister_task_variant<int64_t, int64_replicable_inner>(
+        registrar, "int64_replicable_inner");
   }
 
   return Runtime::start(argc, argv);
