@@ -306,7 +306,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     }
     LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
 
-    // Step 3. Choose reduction.
+    // Step 8. Choose reduction.
     ReductionOpID redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
       switch (uniform_range(seed, seq++, 0, 4) & 3) {
@@ -326,7 +326,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
       LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop);
     }
 
-    // Step 7. Choose the launch type.
+    // Step 9. Choose the launch type.
     uint64_t launch_type = uniform_range(seed, seq++, 0, 2);
     if (launch_type == 0) {
       LOG_ONCE(log_fuzz.info() << "  Launch type: index space");
