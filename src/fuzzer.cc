@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <set>
 #include <string>
 
 #include "legion.h"
@@ -238,22 +239,42 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     LOG_ONCE(log_fuzz.info() << "  Launch domain: " << domain);
 
     // Step 3. Choose fields.
-    IndexTaskLauncher launcher(task_id, domain, TaskArgument(), ArgumentMap());
-    uint64_t field_set =
-        uniform_range(seed, seq++, 0, 1 << config.region_tree_num_fields);
-    LOG_ONCE(log_fuzz.info() << "  Field set: " << field_set);
-    if (field_set != 0) {
-      RegionRequirement &req = launcher.add_region_requirement(
-          RegionRequirement(lpart, 0, READ_WRITE, EXCLUSIVE, tree));
+    std::vector<FieldID> fields;
+    {
+      uint64_t field_set =
+          uniform_range(seed, seq++, 0, 1 << config.region_tree_num_fields);
+      LOG_ONCE(log_fuzz.info() << "  Field set: " << field_set);
       for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
         if ((field_set & (1 << field)) != 0) {
-          req.add_field(field);
+          fields.push_back(field);
         }
       }
     }
 
-    // Step 4. Launch.
-    runtime->execute_index_space(ctx, launcher);
+    // Step 4. Choose the launch type.
+    uint64_t launch_type = uniform_range(seed, seq++, 0, 2);
+    if (launch_type == 0) {
+      LOG_ONCE(log_fuzz.info() << "  Launch type: index space");
+      IndexTaskLauncher launcher(task_id, domain, TaskArgument(), ArgumentMap());
+      if (!fields.empty()) {
+        launcher.add_region_requirement(
+            RegionRequirement(lpart, 0, std::set<FieldID>(fields.begin(), fields.end()),
+                              fields, READ_WRITE, EXCLUSIVE, tree));
+      }
+      runtime->execute_index_space(ctx, launcher);
+    } else {
+      LOG_ONCE(log_fuzz.info() << "  Launch type: individual tasks");
+      for (uint64_t point = range_min; point <= range_max; ++point) {
+        TaskLauncher launcher(task_id, TaskArgument());
+        if (!fields.empty()) {
+          LogicalRegion subregion = runtime->get_logical_subregion_by_color(lpart, point);
+          launcher.add_region_requirement(RegionRequirement(
+              subregion, std::set<FieldID>(fields.begin(), fields.end()), fields,
+              READ_WRITE, EXCLUSIVE, tree));
+        }
+        runtime->execute_task(ctx, launcher);
+      }
+    }
   }
 }
 
