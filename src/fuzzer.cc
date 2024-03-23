@@ -13,10 +13,12 @@
  * limitations under the License.
  */
 
+#include <cstdint>
 #include <iostream>
 #include <string>
 
 #include "legion.h"
+#include "siphash.h"
 
 using namespace Legion;
 
@@ -80,12 +82,28 @@ FuzzerConfig parse_args(int argc, char **argv) {
   return config;
 }
 
+static void gen_bits(const uint8_t *input, size_t input_bytes, uint8_t *output,
+                     size_t output_bytes) {
+  // To generate deterministic uniformly distributed bits, run a hash
+  // function on the seed and use the hash value as the output.
+  const uint8_t k[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+  siphash(input, input_bytes, k, output, output_bytes);
+}
+
+static uint64_t random_uint64_t(uint64_t seed, uint64_t sequence_number) {
+  const uint64_t input[2] = {seed, sequence_number};
+  uint64_t result;
+  gen_bits(reinterpret_cast<const uint8_t *>(&input), sizeof(input),
+           reinterpret_cast<uint8_t *>(&result), sizeof(result));
+  return result;
+}
+
 void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
                Runtime *runtime) {}
 
 int int_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
              Runtime *runtime) {
-  return 123;
+  return 1;
 }
 
 void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
@@ -93,7 +111,7 @@ void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Co
 
 int int_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
               Runtime *runtime) {
-  return 123;
+  return 2;
 }
 
 void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
@@ -101,7 +119,7 @@ void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &r
 
 int int_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
                         Context ctx, Runtime *runtime) {
-  return 123;
+  return 3;
 }
 
 void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
@@ -109,7 +127,7 @@ void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &
 
 int int_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
                          Context ctx, Runtime *runtime) {
-  return 123;
+  return 4;
 }
 
 void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
@@ -117,11 +135,28 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
   InputArgs args = Runtime::get_input_args();
   FuzzerConfig config = parse_args(args.argc, args.argv);
 
+  const uint64_t seed = config.initial_seed;
+  uint64_t sequence_number = 0;
   for (uint64_t op = 0; op < config.num_ops; ++op) {
-    TaskLauncher fx_launcher(INT_LEAF_TASK_ID, TaskArgument());
-    Future fx = runtime->execute_task(ctx, fx_launcher);
-    int rx = fx.get_result<int>();
-    std::cout << "rx : " << rx << std::endl;
+    uint64_t random = random_uint64_t(seed, sequence_number++);
+
+    switch (random & 1) {
+      case 0: {
+        TaskLauncher fx_launcher(INT_LEAF_TASK_ID, TaskArgument());
+        Future fx = runtime->execute_task(ctx, fx_launcher);
+        int rx = fx.get_result<int>();
+        std::cout << "leaf result : " << rx << std::endl;
+      } break;
+      case 1: {
+        TaskLauncher fx_launcher(INT_INNER_TASK_ID, TaskArgument());
+        Future fx = runtime->execute_task(ctx, fx_launcher);
+        int rx = fx.get_result<int>();
+        std::cout << "inner result : " << rx << std::endl;
+      } break;
+      default:
+        abort();
+        break;
+    }
   }
 }
 
