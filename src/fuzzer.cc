@@ -356,9 +356,17 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
       }
     } else {
       LOG_ONCE(log_fuzz.info() << "  Launch type: individual tasks");
+
+      // Just to really mess with things, when we do individual launches,
+      // shift the shard space points over by a random amount
+      uint64_t offset = uniform_range(seed, seq++, 0, config.region_tree_width);
+      LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << offset);
+
       for (uint64_t point = range_min; point <= range_max; ++point) {
         TaskLauncher launcher(task_id, TaskArgument());
-        launcher.point = Point<1>(point);
+        launcher.point = Point<1>((point - range_min + offset) % (range_max - range_min) + range_min);
+        LOG_ONCE(log_fuzz.info() << "  Task: " << point);
+        LOG_ONCE(log_fuzz.info() << "    Shard point: " << launcher.point);
         IndexSpaceT<1> launch_space = runtime->create_index_space<1>(ctx, domain);
         launcher.sharding_space = launch_space;
         if (!fields.empty()) {
