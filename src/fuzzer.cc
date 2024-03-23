@@ -244,6 +244,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     if (range_max < range_min) {
       std::swap(range_min, range_max);
     }
+    uint64_t range_size = range_max - range_min + 1;
     Rect<1> domain((Point<1>(range_min)), (Point<1>(range_max)));
     LOG_ONCE(log_fuzz.info() << "  Launch domain: " << domain);
 
@@ -364,7 +365,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 
       for (uint64_t point = range_min; point <= range_max; ++point) {
         TaskLauncher launcher(task_id, TaskArgument());
-        launcher.point = Point<1>((point - range_min + offset) % (range_max - range_min + 1) + range_min);
+        launcher.point = Point<1>((point - range_min + offset) % range_size + range_min);
         LOG_ONCE(log_fuzz.info() << "  Task: " << point);
         LOG_ONCE(log_fuzz.info() << "    Shard point: " << launcher.point);
         IndexSpaceT<1> launch_space = runtime->create_index_space<1>(ctx, domain);
