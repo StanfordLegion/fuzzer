@@ -14,6 +14,7 @@
  */
 
 #include <iostream>
+#include <string>
 
 #include "legion.h"
 
@@ -30,6 +31,54 @@ enum TaskIDs {
   INT_REPLICABLE_INNER_TASK_ID,
   TOP_LEVEL_TASK_ID,
 };
+
+static Logger log_fuzz("fuzz");
+
+static long long parse_long_long(const std::string &flag, const std::string &arg) {
+  long long result;
+  size_t consumed;
+  result = std::stoll(arg, &consumed);
+  if (consumed != arg.size()) {
+    log_fuzz.error() << "error in parsing flag: " << flag << " " << arg;
+    abort();
+  }
+  return result;
+}
+
+static uint64_t parse_uint64_t(const std::string &flag, const std::string &arg) {
+  long long result = parse_long_long(flag, arg);
+  if (result < 0) {
+    log_fuzz.error() << "error in parsing flag: " << flag << " " << arg
+                     << " (value is negative)";
+    abort();
+  }
+  return result;
+}
+
+struct FuzzerConfig {
+  uint64_t initial_seed;
+  uint64_t region_tree_depth;
+  uint64_t num_ops;
+  FuzzerConfig() : initial_seed(0), region_tree_depth(1), num_ops(1) {}
+};
+
+FuzzerConfig parse_args(int argc, char **argv) {
+  FuzzerConfig config;
+  for (int i = 1; i < argc; i++) {
+    std::string flag(argv[i]);
+    if (flag == "-fuzz:seed") {
+      std::string arg(argv[++i]);
+      config.initial_seed = parse_uint64_t(flag, arg);
+    } else if (flag == "-fuzz:depth") {
+      std::string arg(argv[++i]);
+      config.region_tree_depth = parse_uint64_t(flag, arg);
+    } else if (flag == "-fuzz:ops") {
+      std::string arg(argv[++i]);
+      config.num_ops = parse_uint64_t(flag, arg);
+    }
+  }
+  return config;
+}
 
 void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
                Runtime *runtime) {}
@@ -65,16 +114,15 @@ int int_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &re
 
 void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
                Runtime *runtime) {
-  TaskLauncher fx_launcher(INT_LEAF_TASK_ID, TaskArgument());
-  Future fx = runtime->execute_task(ctx, fx_launcher);
-  int rx = fx.get_result<int>();
+  InputArgs args = Runtime::get_input_args();
+  FuzzerConfig config = parse_args(args.argc, args.argv);
 
-  TaskLauncher fy_launcher(INT_LEAF_TASK_ID, TaskArgument());
-  Future fy = runtime->execute_task(ctx, fy_launcher);
-
-  int ry = fy.get_result<int>();
-
-  std::cout << "rx, ry : " << rx << " " << ry << std::endl;
+  for (uint64_t op = 0; op < config.num_ops; ++op) {
+    TaskLauncher fx_launcher(INT_LEAF_TASK_ID, TaskArgument());
+    Future fx = runtime->execute_task(ctx, fx_launcher);
+    int rx = fx.get_result<int>();
+    std::cout << "rx : " << rx << std::endl;
+  }
 }
 
 int main(int argc, char **argv) {
