@@ -1,4 +1,4 @@
-add_executable(fuzzer fuzzer.cc)
+add_executable(fuzzer fuzzer.cc siphash.c)
 target_link_libraries(fuzzer Legion::Legion)
 set_target_properties(fuzzer PROPERTIES CXX_STANDARD 17)
 
