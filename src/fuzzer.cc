@@ -266,6 +266,9 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
       LOG_ONCE(log_fuzz.info() << "  Launch type: individual tasks");
       for (uint64_t point = range_min; point <= range_max; ++point) {
         TaskLauncher launcher(task_id, TaskArgument());
+        launcher.point = Point<1>(point);
+        IndexSpaceT<1> launch_space = runtime->create_index_space<1>(ctx, domain);
+        launcher.sharding_space = launch_space;
         if (!fields.empty()) {
           LogicalRegion subregion = runtime->get_logical_subregion_by_color(lpart, point);
           launcher.add_region_requirement(RegionRequirement(
@@ -273,9 +276,14 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
               READ_WRITE, EXCLUSIVE, tree));
         }
         runtime->execute_task(ctx, launcher);
+        runtime->destroy_index_space(ctx, launch_space);
       }
     }
   }
+
+  runtime->destroy_logical_region(ctx, tree);
+  runtime->destroy_field_space(ctx, fspace);
+  runtime->destroy_index_space(ctx, ispace);
 }
 
 int main(int argc, char **argv) {
