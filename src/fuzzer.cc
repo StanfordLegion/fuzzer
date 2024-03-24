@@ -328,6 +328,14 @@ public:
                      RegionForest &_forest)
       : runtime(_runtime), ctx(_ctx), config(_config), forest(_forest) {}
 
+  void build(const uint64_t seed, const uint64_t stream, uint64_t &seq,
+             bool launch_complete) {
+    select_fields(seed, stream, seq);
+    select_privilege(seed, stream, seq);
+    select_reduction(seed, stream, seq, launch_complete);
+  }
+
+private:
   void select_fields(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
     fields.clear();
 
@@ -385,6 +393,7 @@ public:
     }
   }
 
+public:
   void add_to_index_task(IndexTaskLauncher &launcher) {
     if (!fields.empty()) {
       if (privilege == LEGION_REDUCE) {
@@ -443,6 +452,17 @@ public:
         launch_domain(Rect<1>::make_empty()),
         req(_runtime, _ctx, _config, _forest) {}
 
+  void build(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
+    select_launch_type(seed, stream, seq);
+    select_task_id(seed, stream, seq);
+    select_launch_domain(seed, stream, seq);
+    select_scalar_reduction(seed, stream, seq);
+    select_elide_future_return(seed, stream, seq);
+    select_region_requirement(seed, stream, seq);
+    select_projection(seed, stream, seq);
+  }
+
+private:
   void select_launch_type(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
     switch (uniform_range(seed, stream, seq, 0, 1)) {
       case 0: {
@@ -525,9 +545,7 @@ public:
 
   void select_region_requirement(const uint64_t seed, const uint64_t stream,
                                  uint64_t &seq) {
-    req.select_fields(seed, stream, seq);
-    req.select_privilege(seed, stream, seq);
-    req.select_reduction(seed, stream, seq, launch_complete);
+    req.build(seed, stream, seq, launch_complete);
   }
 
   void select_projection(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
@@ -539,6 +557,7 @@ public:
     }
   }
 
+public:
   void execute(std::vector<Future> &futures) {
     switch (launch_type) {
       case LaunchType::SINGLE_TASK: {
@@ -633,13 +652,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     LOG_ONCE(log_fuzz.info() << "Operation: " << op_idx);
 
     OperationBuilder op(runtime, ctx, config, forest);
-    op.select_launch_type(seed, stream, seq);
-    op.select_task_id(seed, stream, seq);
-    op.select_launch_domain(seed, stream, seq);
-    op.select_scalar_reduction(seed, stream, seq);
-    op.select_elide_future_return(seed, stream, seq);
-    op.select_region_requirement(seed, stream, seq);
-    op.select_projection(seed, stream, seq);
+    op.build(seed, stream, seq);
     op.execute(futures);
   }
 
