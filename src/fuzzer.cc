@@ -262,8 +262,26 @@ public:
 
   LogicalRegion get_root() const { return root; }
 
-  LogicalPartition get_disjoint_partition() const {
-    return runtime->get_logical_partition(root, disjoint_partitions[0]);
+  LogicalPartition select_disjoint_partition(const uint64_t seed, const uint64_t stream,
+                                             uint64_t &seq) {
+    uint64_t num_disjoint = disjoint_partitions.size();
+    uint64_t part_idx = uniform_range(seed, stream, seq, 0, num_disjoint - 1);
+    return runtime->get_logical_partition(root, disjoint_partitions[part_idx]);
+  }
+
+  LogicalPartition select_any_partition(const uint64_t seed, const uint64_t stream,
+                                        uint64_t &seq) {
+    uint64_t num_disjoint = disjoint_partitions.size();
+    uint64_t num_aliased = aliased_partitions.size();
+    uint64_t num_total = num_disjoint + num_aliased;
+    uint64_t part_idx = uniform_range(seed, stream, seq, 0, num_total - 1);
+    if (part_idx < num_disjoint) {
+      return runtime->get_logical_partition(root, disjoint_partitions[part_idx]);
+    } else {
+      part_idx -= num_disjoint;
+      assert(part_idx < num_aliased);
+      return runtime->get_logical_partition(root, aliased_partitions[part_idx]);
+    }
   }
 
   void set_last_redop(ReductionOpID redop) { last_redop = redop; }
@@ -329,10 +347,12 @@ public:
       : runtime(_runtime), ctx(_ctx), config(_config), forest(_forest) {}
 
   void build(const uint64_t seed, const uint64_t stream, uint64_t &seq,
-             bool launch_complete) {
+             bool launch_complete, bool requires_projection) {
     select_fields(seed, stream, seq);
     select_privilege(seed, stream, seq);
     select_reduction(seed, stream, seq, launch_complete);
+    select_projection(seed, stream, seq, requires_projection);
+    select_partition(seed, stream, seq, requires_projection);
   }
 
 private:
@@ -393,27 +413,52 @@ private:
     }
   }
 
+  bool need_disjoint() const {
+    // If our privilege involves writing (read-write, write-discard, etc.),
+    // then we require a disjoint region requirement (i.e. disjoint partition
+    // and disjoint projection functor).
+    return (privilege & LEGION_WRITE_PRIV) != 0;
+  }
+
+  void select_projection(const uint64_t seed, const uint64_t stream, uint64_t &seq,
+                         bool requires_projection) {
+    projection = LEGION_MAX_APPLICATION_PROJECTION_ID;
+    if (requires_projection) {
+      projection = 0;  // identity projection functor
+      LOG_ONCE(log_fuzz.info() << "  Projection: " << projection);
+    }
+  }
+
+  void select_partition(const uint64_t seed, const uint64_t stream, uint64_t &seq,
+                        bool requires_projection) {
+    if (requires_projection && need_disjoint()) {
+      partition = forest.select_disjoint_partition(seed, stream, seq);
+    } else {
+      partition = forest.select_any_partition(seed, stream, seq);
+    }
+    LOG_ONCE(log_fuzz.info() << "  Partition: " << partition);
+  }
+
 public:
   void add_to_index_task(IndexTaskLauncher &launcher) {
     if (!fields.empty()) {
+      assert(projection != LEGION_MAX_APPLICATION_PROJECTION_ID);
       if (privilege == LEGION_REDUCE) {
-        launcher.add_region_requirement(
-            RegionRequirement(forest.get_disjoint_partition(), 0,
-                              std::set<FieldID>(fields.begin(), fields.end()), fields,
-                              redop, EXCLUSIVE, forest.get_root()));
+        launcher.add_region_requirement(RegionRequirement(
+            partition, projection, std::set<FieldID>(fields.begin(), fields.end()),
+            fields, redop, EXCLUSIVE, forest.get_root()));
       } else {
-        launcher.add_region_requirement(
-            RegionRequirement(forest.get_disjoint_partition(), 0,
-                              std::set<FieldID>(fields.begin(), fields.end()), fields,
-                              privilege, EXCLUSIVE, forest.get_root()));
+        launcher.add_region_requirement(RegionRequirement(
+            partition, projection, std::set<FieldID>(fields.begin(), fields.end()),
+            fields, privilege, EXCLUSIVE, forest.get_root()));
       }
     }
   }
 
   void add_to_single_task(TaskLauncher &launcher, Point<1> point) {
     if (!fields.empty()) {
-      LogicalRegion subregion = runtime->get_logical_subregion_by_color(
-          forest.get_disjoint_partition(), point[0]);
+      LogicalRegion subregion =
+          runtime->get_logical_subregion_by_color(partition, point[0]);
       if (privilege == LEGION_REDUCE) {
         launcher.add_region_requirement(
             RegionRequirement(subregion, std::set<FieldID>(fields.begin(), fields.end()),
@@ -434,6 +479,8 @@ private:
   std::vector<FieldID> fields;
   PrivilegeMode privilege = LEGION_NO_ACCESS;
   ReductionOpID redop = LEGION_REDOP_LAST;
+  ProjectionID projection = LEGION_MAX_APPLICATION_PROJECTION_ID;
+  LogicalPartition partition = LogicalPartition::NO_PART;
 };
 
 enum class LaunchType {
@@ -545,7 +592,7 @@ private:
 
   void select_region_requirement(const uint64_t seed, const uint64_t stream,
                                  uint64_t &seq) {
-    req.build(seed, stream, seq, launch_complete);
+    req.build(seed, stream, seq, launch_complete, launch_type == LaunchType::INDEX_TASK);
   }
 
   void select_projection(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
