@@ -296,6 +296,32 @@ private:
   ReductionOpID last_redop = LEGION_REDOP_LAST;
 };
 
+static ReductionOpID select_redop(const uint64_t seed, const uint64_t stream,
+                                  uint64_t &seq) {
+  switch (uniform_range(seed, stream, seq, 0, 8)) {
+    case 0:
+      return LEGION_REDOP_SUM_INT64;
+    case 1:
+      return LEGION_REDOP_DIFF_INT64;
+    case 2:
+      return LEGION_REDOP_PROD_INT64;
+    case 3:
+      return LEGION_REDOP_DIV_INT64;
+    case 4:
+      return LEGION_REDOP_MIN_INT64;
+    case 5:
+      return LEGION_REDOP_MAX_INT64;
+    case 6:
+      return LEGION_REDOP_AND_INT64;
+    case 7:
+      return LEGION_REDOP_OR_INT64;
+    case 8:
+      return LEGION_REDOP_XOR_INT64;
+    default:
+      abort();
+  }
+}
+
 class RequirementBuilder {
 public:
   RequirementBuilder(Runtime *_runtime, Context _ctx, const FuzzerConfig &_config,
@@ -347,29 +373,14 @@ public:
         // same reduction operator again.
         redop = forest.get_last_redop();
       } else {
-        switch (uniform_range(seed, stream, seq, 0, 3)) {
-          case 0: {
-            redop = LEGION_REDOP_SUM_INT64;
-          } break;
-          case 1: {
-            redop = LEGION_REDOP_PROD_INT64;
-          } break;
-          case 2: {
-            redop = LEGION_REDOP_MIN_INT64;
-          } break;
-          case 3: {
-            redop = LEGION_REDOP_MAX_INT64;
-          } break;
-          default:
-            abort();
-        }
+        redop = select_redop(seed, stream, seq);
         forest.set_last_redop(redop);
       }
       LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop);
-    } else if (launch_complete) {
-      // Any non-reduction privilege will clear the last reduction, making it
-      // safe to reduce again, assuming the launch actually covers the entire
-      // region.
+    } else if (privilege != LEGION_NO_ACCESS && launch_complete) {
+      // Any non-reduction (non-no-access) privilege will clear the last
+      // reduction, making it safe to reduce again, assuming the launch
+      // actually covers the entire region.
       forest.set_last_redop(LEGION_REDOP_LAST);
     }
   }
@@ -498,22 +509,7 @@ public:
                                uint64_t &seq) {
     scalar_redop = LEGION_REDOP_LAST;
     if (launch_type == LaunchType::INDEX_TASK && task_produces_value) {
-      switch (uniform_range(seed, stream, seq, 0, 3)) {
-        case 0: {
-          scalar_redop = LEGION_REDOP_SUM_INT64;
-        } break;
-        case 1: {
-          scalar_redop = LEGION_REDOP_PROD_INT64;
-        } break;
-        case 2: {
-          scalar_redop = LEGION_REDOP_MIN_INT64;
-        } break;
-        case 3: {
-          scalar_redop = LEGION_REDOP_MAX_INT64;
-        } break;
-        default:
-          abort();
-      }
+      scalar_redop = select_redop(seed, stream, seq);
       LOG_ONCE(log_fuzz.info() << "  Scalar redop: " << scalar_redop);
 
       scalar_reduction_ordered = uniform_range(seed, stream, seq, 0, 1) == 0;
