@@ -199,8 +199,9 @@ public:
       }
     }
     root = runtime->create_logical_region(ctx, ispace, fspace);
-    ipart = runtime->create_equal_partition(ctx, ispace, ispace);
-    lpart = runtime->get_logical_partition(root, ipart);
+
+    // Make some partitions we know will be disjoint.
+    disjoint_partitions.push_back(runtime->create_equal_partition(ctx, ispace, ispace));
 
     // Initialize everything so we don't get unitialized read warnings
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
@@ -216,7 +217,9 @@ public:
 
   LogicalRegion get_root() const { return root; }
 
-  LogicalPartition get_disjoint_partition() const { return lpart; }
+  LogicalPartition get_disjoint_partition() const {
+    return runtime->get_logical_partition(root, disjoint_partitions[0]);
+  }
 
   void set_last_redop(ReductionOpID redop) { last_redop = redop; }
   ReductionOpID get_last_redop() const { return last_redop; }
@@ -227,8 +230,7 @@ private:
   IndexSpaceT<N> ispace;
   FieldSpace fspace;
   LogicalRegion root;
-  IndexPartition ipart;
-  LogicalPartition lpart;
+  std::vector<IndexPartition> disjoint_partitions;
   ReductionOpID last_redop = LEGION_REDOP_LAST;
 };
 
