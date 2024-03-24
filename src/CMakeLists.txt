@@ -1,4 +1,7 @@
-add_executable(fuzzer fuzzer.cc siphash.c)
+add_executable(fuzzer
+  deterministic_random.h deterministic_random.cc
+  fuzzer.cc
+  siphash.h siphash.c)
 target_link_libraries(fuzzer Legion::Legion)
 set_target_properties(fuzzer PROPERTIES CXX_STANDARD 17)
 
