@@ -506,7 +506,7 @@ public:
     select_scalar_reduction(seed, stream, seq);
     select_elide_future_return(seed, stream, seq);
     select_region_requirement(seed, stream, seq);
-    select_projection(seed, stream, seq);
+    select_shard_offset(seed, stream, seq);
   }
 
 private:
@@ -595,12 +595,11 @@ private:
     req.build(seed, stream, seq, launch_complete, launch_type == LaunchType::INDEX_TASK);
   }
 
-  void select_projection(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
-    projection_offset = 0;
+  void select_shard_offset(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
+    shard_offset = 0;
     if (launch_type == LaunchType::SINGLE_TASK) {
-      projection_offset =
-          uniform_range(seed, stream, seq, 0, config.region_tree_width - 1);
-      LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << projection_offset);
+      shard_offset = uniform_range(seed, stream, seq, 0, config.region_tree_width - 1);
+      LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << shard_offset);
     }
   }
 
@@ -640,7 +639,7 @@ private:
     for (uint64_t point = range_min; point <= range_max; ++point) {
       TaskLauncher launcher(task_id, TaskArgument());
       launcher.point =
-          Point<1>((point - range_min + projection_offset) % range_size + range_min);
+          Point<1>((point - range_min + shard_offset) % range_size + range_min);
       LOG_ONCE(log_fuzz.info() << "  Task: " << point);
       LOG_ONCE(log_fuzz.info() << "    Shard point: " << launcher.point);
       IndexSpaceT<1> launch_space = runtime->create_index_space<1>(ctx, launch_domain);
@@ -677,7 +676,7 @@ private:
   bool scalar_reduction_ordered = false;
   bool elide_future_return = false;
   RequirementBuilder req;
-  uint64_t projection_offset = 0;
+  uint64_t shard_offset = 0;
 };
 
 void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
