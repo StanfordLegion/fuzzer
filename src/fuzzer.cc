@@ -234,6 +234,8 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
         task_id = INT64_INNER_TASK_ID;
         has_value = true;
       } break;
+      default:
+        abort();
     }
     LOG_ONCE(log_fuzz.info() << "  Task ID: " << task_id);
 
@@ -251,7 +253,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     // Step 3. Choose scalar reduction.
     ReductionOpID scalar_redop = LEGION_REDOP_LAST;
     if (has_value) {
-      switch (uniform_range(seed, seq++, 0, 4) & 3) {
+      switch (uniform_range(seed, seq++, 0, 4)) {
         case 0: {
           scalar_redop = LEGION_REDOP_SUM_INT64;
         } break;
@@ -264,6 +266,8 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
         case 3: {
           scalar_redop = LEGION_REDOP_MAX_INT64;
         } break;
+        default:
+          abort();
       }
       LOG_ONCE(log_fuzz.info() << "  Scalar redop: " << scalar_redop);
     }
@@ -291,7 +295,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 
     // Step 7. Choose privilege.
     PrivilegeMode privilege;
-    switch (uniform_range(seed, seq++, 0, 4) & 3) {
+    switch (uniform_range(seed, seq++, 0, 4)) {
       case 0: {
         privilege = LEGION_READ_ONLY;
       } break;
@@ -304,13 +308,15 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
       case 3: {
         privilege = LEGION_REDUCE;
       } break;
+      default:
+        abort();
     }
     LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
 
     // Step 8. Choose reduction.
     ReductionOpID redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
-      switch (uniform_range(seed, seq++, 0, 4) & 3) {
+      switch (uniform_range(seed, seq++, 0, 4)) {
         case 0: {
           redop = LEGION_REDOP_SUM_INT64;
         } break;
@@ -323,6 +329,8 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
         case 3: {
           redop = LEGION_REDOP_MAX_INT64;
         } break;
+        default:
+          abort();
       }
       LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop);
     }
