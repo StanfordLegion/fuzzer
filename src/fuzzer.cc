@@ -76,6 +76,7 @@ struct FuzzerConfig {
   uint64_t region_tree_size_factor = 4;
   uint64_t region_tree_num_fields = 4;
   uint64_t num_ops = 1;
+  uint64_t skip_ops = 0;
 
   static FuzzerConfig parse_args(int argc, char **argv) {
     FuzzerConfig config;
@@ -93,12 +94,18 @@ struct FuzzerConfig {
       } else if (flag == "-fuzz:branch") {
         std::string arg(argv[++i]);
         config.region_tree_branch_factor = parse_uint64_t(flag, arg);
+      } else if (flag == "-fuzz:size") {
+        std::string arg(argv[++i]);
+        config.region_tree_size_factor = parse_uint64_t(flag, arg);
       } else if (flag == "-fuzz:fields") {
         std::string arg(argv[++i]);
         config.region_tree_num_fields = parse_uint64_t(flag, arg);
       } else if (flag == "-fuzz:ops") {
         std::string arg(argv[++i]);
         config.num_ops = parse_uint64_t(flag, arg);
+      } else if (flag == "-fuzz:skip") {
+        std::string arg(argv[++i]);
+        config.skip_ops = parse_uint64_t(flag, arg);
       }
     }
     return config;
@@ -111,9 +118,12 @@ struct FuzzerConfig {
     LOG_ONCE(log_fuzz.print() << "  config.region_tree_width = " << region_tree_width);
     LOG_ONCE(log_fuzz.print() << "  config.region_tree_branch_factor = "
                               << region_tree_branch_factor);
+    LOG_ONCE(log_fuzz.print() << "  config.region_tree_size_factor = "
+                              << region_tree_size_factor);
     LOG_ONCE(log_fuzz.print() << "  config.region_tree_num_fields = "
                               << region_tree_num_fields);
     LOG_ONCE(log_fuzz.print() << "  config.num_ops = " << num_ops);
+    LOG_ONCE(log_fuzz.print() << "  config.skip_ops = " << skip_ops);
   }
 };
 
@@ -389,7 +399,6 @@ private:
 
     uint64_t field_set =
         uniform_range(seed, stream, seq, 0, (1 << config.region_tree_num_fields) - 1);
-    LOG_ONCE(log_fuzz.info() << "  Field set: 0x" << std::hex << field_set);
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
       if ((field_set & (1 << field)) != 0) {
         fields.push_back(field);
@@ -417,7 +426,6 @@ private:
       default:
         abort();
     }
-    LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
   }
 
   void select_reduction(const uint64_t seed, const uint64_t stream, uint64_t &seq,
@@ -465,7 +473,6 @@ private:
         default:
           abort();
       }
-      LOG_ONCE(log_fuzz.info() << "  Projection: " << projection);
     }
   }
 
@@ -476,7 +483,6 @@ private:
     } else {
       partition = forest.select_any_partition(seed, stream, seq);
     }
-    LOG_ONCE(log_fuzz.info() << "  Partition: " << partition);
   }
 
 public:
@@ -509,6 +515,22 @@ public:
                               fields, privilege, EXCLUSIVE, forest.get_root()));
       }
     }
+  }
+
+  void display() const {
+    {
+      Realm::LoggerMessage msg = log_fuzz.info();
+      msg = msg << "  Fields:";
+      for (FieldID field : fields) {
+        msg = msg << " " << field;
+      }
+      LOG_ONCE(msg);
+    }
+    LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
+    if (projection == LEGION_MAX_APPLICATION_PROJECTION_ID) {
+      LOG_ONCE(log_fuzz.info() << "  Projection: " << projection);
+    }
+    LOG_ONCE(log_fuzz.info() << "  Partition: " << partition);
   }
 
 private:
@@ -554,11 +576,9 @@ private:
     switch (uniform_range(seed, stream, seq, 0, 1)) {
       case 0: {
         launch_type = LaunchType::SINGLE_TASK;
-        LOG_ONCE(log_fuzz.info() << "  Launch type: single task");
       } break;
       case 1: {
         launch_type = LaunchType::INDEX_TASK;
-        LOG_ONCE(log_fuzz.info() << "  Launch type: index space");
       } break;
       default:
         abort();
@@ -586,7 +606,6 @@ private:
       default:
         abort();
     }
-    LOG_ONCE(log_fuzz.info() << "  Task ID: " << task_id);
   }
 
   void select_launch_domain(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
@@ -609,7 +628,6 @@ private:
 
     range_size = range_max - range_min + 1;
     launch_domain = Rect<1>(Point<1>(range_min), Point<1>(range_max));
-    LOG_ONCE(log_fuzz.info() << "  Launch domain: " << launch_domain);
   }
 
   void select_scalar_reduction(const uint64_t seed, const uint64_t stream,
@@ -617,17 +635,13 @@ private:
     scalar_redop = LEGION_REDOP_LAST;
     if (launch_type == LaunchType::INDEX_TASK && task_produces_value) {
       scalar_redop = select_redop(seed, stream, seq);
-      LOG_ONCE(log_fuzz.info() << "  Scalar redop: " << scalar_redop);
-
       scalar_reduction_ordered = uniform_range(seed, stream, seq, 0, 1) == 0;
-      LOG_ONCE(log_fuzz.info() << "    Ordered: " << scalar_reduction_ordered);
     }
   }
 
   void select_elide_future_return(const uint64_t seed, const uint64_t stream,
                                   uint64_t &seq) {
     elide_future_return = uniform_range(seed, stream, seq, 0, 1) == 0;
-    LOG_ONCE(log_fuzz.info() << "  Elide future return: " << elide_future_return);
   }
 
   void select_region_requirement(const uint64_t seed, const uint64_t stream,
@@ -639,12 +653,12 @@ private:
     shard_offset = 0;
     if (launch_type == LaunchType::SINGLE_TASK) {
       shard_offset = uniform_range(seed, stream, seq, 0, config.region_tree_width - 1);
-      LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << shard_offset);
     }
   }
 
 public:
   void execute(std::vector<Future> &futures) {
+    display();
     switch (launch_type) {
       case LaunchType::SINGLE_TASK: {
         execute_single_task(futures);
@@ -700,6 +714,31 @@ private:
     }
   }
 
+  void display() const {
+    switch (launch_type) {
+      case LaunchType::SINGLE_TASK: {
+        LOG_ONCE(log_fuzz.info() << "  Launch type: single task");
+      } break;
+      case LaunchType::INDEX_TASK: {
+        LOG_ONCE(log_fuzz.info() << "  Launch type: index space");
+      } break;
+      default:
+        abort();
+    }
+
+    LOG_ONCE(log_fuzz.info() << "  Task ID: " << task_id);
+    LOG_ONCE(log_fuzz.info() << "  Launch domain: " << launch_domain);
+    if (scalar_redop != LEGION_REDOP_LAST) {
+      LOG_ONCE(log_fuzz.info() << "  Scalar redop: " << scalar_redop);
+      LOG_ONCE(log_fuzz.info() << "    Ordered: " << scalar_reduction_ordered);
+    }
+    LOG_ONCE(log_fuzz.info() << "  Elide future return: " << elide_future_return);
+    req.display();
+    if (launch_type == LaunchType::SINGLE_TASK) {
+      LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << shard_offset);
+    }
+  }
+
 private:
   Runtime *runtime;
   Context ctx;
@@ -735,11 +774,16 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
   std::vector<Future> futures;
   uint64_t seq = 0;
   for (uint64_t op_idx = 0; op_idx < config.num_ops; ++op_idx) {
-    LOG_ONCE(log_fuzz.info() << "Operation: " << op_idx);
-
     OperationBuilder op(runtime, ctx, config, forest);
     op.build(seed, stream, seq);
-    op.execute(futures);
+
+    // It is VERY IMPORTANT that the random number generator is NOT USED
+    // inside this if statement. Otherwise, we lose the ability to replay
+    // while skipping operations.
+    if (op_idx >= config.skip_ops) {
+      LOG_ONCE(log_fuzz.info() << "Operation: " << op_idx);
+      op.execute(futures);
+    }
   }
 
   for (Future &future : futures) {
