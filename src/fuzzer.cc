@@ -184,75 +184,122 @@ int64_t int64_replicable_inner(const Task *task,
   return 4;
 }
 
-void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-               Runtime *runtime) {
-  InputArgs args = Runtime::get_input_args();
-  FuzzerConfig config = FuzzerConfig::parse_args(args.argc, args.argv);
-  config.log_config(runtime, ctx);
+template <int N>
+class RegionForest {
+public:
+  RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config)
+      : runtime(_runtime), ctx(_ctx) {
+    ispace = runtime->create_index_space<1>(
+        ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width)));
+    fspace = runtime->create_field_space(ctx);
+    {
+      FieldAllocator falloc = runtime->create_field_allocator(ctx, fspace);
+      for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
+        falloc.allocate_field(sizeof(uint64_t), field);
+      }
+    }
+    root = runtime->create_logical_region(ctx, ispace, fspace);
+    ipart = runtime->create_equal_partition(ctx, ispace, ispace);
+    lpart = runtime->get_logical_partition(root, ipart);
 
-  IndexSpaceT<1> ispace = runtime->create_index_space<1>(
-      ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width)));
-  FieldSpace fspace = runtime->create_field_space(ctx);
-  {
-    FieldAllocator falloc = runtime->create_field_allocator(ctx, fspace);
+    // Initialize everything so we don't get unitialized read warnings
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
-      falloc.allocate_field(sizeof(uint64_t), field);
+      runtime->fill_field<uint64_t>(ctx, root, root, field, field);
     }
   }
-  LogicalRegion tree = runtime->create_logical_region(ctx, ispace, fspace);
-  IndexPartition ipart = runtime->create_equal_partition(ctx, ispace, ispace);
-  LogicalPartition lpart = runtime->get_logical_partition(tree, ipart);
 
-  for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
-    runtime->fill_field<uint64_t>(ctx, tree, tree, field, field);
+  ~RegionForest() {
+    runtime->destroy_logical_region(ctx, root);
+    runtime->destroy_field_space(ctx, fspace);
+    runtime->destroy_index_space(ctx, ispace);
   }
 
-  std::vector<Future> futures;
+  LogicalRegion get_root() const { return root; }
 
-  const uint64_t seed = config.initial_seed;
-  uint64_t seq = 0;
-  for (uint64_t op = 0; op < config.num_ops; ++op) {
-    LOG_ONCE(log_fuzz.info() << "Operation: " << op);
+  LogicalPartition get_disjoint_partition() const { return lpart; }
 
-    // Step 1. Choose a random task to run.
-    TaskID task_id;
-    bool has_value;
+private:
+  Runtime *runtime;
+  Context ctx;
+  IndexSpaceT<N> ispace;
+  FieldSpace fspace;
+  LogicalRegion root;
+  IndexPartition ipart;
+  LogicalPartition lpart;
+};
+
+class Operation {
+public:
+  Operation(Runtime *_runtime, Context _ctx, const FuzzerConfig &_config,
+            const RegionForest<1> &_forest)
+      : runtime(_runtime),
+        ctx(_ctx),
+        config(_config),
+        forest(_forest),
+        task_id(LEGION_MAX_APPLICATION_TASK_ID),
+        task_produces_value(false),
+        launch_complete(false),
+        range_min(0),
+        range_max(0),
+        range_size(0),
+        launch_domain(Rect<1>::make_empty()),
+        scalar_redop(LEGION_REDOP_LAST),
+        scalar_reduction_ordered(false),
+        elide_future_return(false),
+        privilege(LEGION_NO_ACCESS),
+        redop(LEGION_REDOP_LAST),
+        launch_type(0) {}
+
+  void select_task_id(const uint64_t seed, uint64_t &seq) {
     switch (uniform_range(seed, seq++, 0, 4) & 3) {
       case 0: {
         task_id = VOID_LEAF_TASK_ID;
-        has_value = false;
+        task_produces_value = false;
       } break;
       case 1: {
         task_id = VOID_INNER_TASK_ID;
-        has_value = false;
+        task_produces_value = false;
       } break;
       case 2: {
         task_id = INT64_LEAF_TASK_ID;
-        has_value = true;
+        task_produces_value = true;
       } break;
       case 3: {
         task_id = INT64_INNER_TASK_ID;
-        has_value = true;
+        task_produces_value = true;
       } break;
       default:
         abort();
     }
     LOG_ONCE(log_fuzz.info() << "  Task ID: " << task_id);
+  }
 
-    // Step 2. Choose launch domain.
-    uint64_t range_min = uniform_range(seed, seq++, 0, config.region_tree_width);
-    uint64_t range_max = uniform_range(seed, seq++, 0, config.region_tree_width);
-    // Make sure the range is always non-empty.
-    if (range_max < range_min) {
-      std::swap(range_min, range_max);
+  void select_launch_domain(const uint64_t seed, uint64_t &seq) {
+    // A lot of Legion algorithms hinge on whether a launch is
+    // complete or not, so we'll make that a special case here.
+
+    launch_complete = uniform_range(seed, seq++, 0, 2) == 0;
+
+    if (launch_complete) {
+      range_min = 0;
+      range_max = config.region_tree_width;
+    } else {
+      range_min = uniform_range(seed, seq++, 0, config.region_tree_width);
+      range_max = uniform_range(seed, seq++, 0, config.region_tree_width);
+      // Make sure the range is always non-empty.
+      if (range_max < range_min) {
+        std::swap(range_min, range_max);
+      }
     }
-    uint64_t range_size = range_max - range_min + 1;
-    Rect<1> domain((Point<1>(range_min)), (Point<1>(range_max)));
-    LOG_ONCE(log_fuzz.info() << "  Launch domain: " << domain);
 
-    // Step 3. Choose scalar reduction.
-    ReductionOpID scalar_redop = LEGION_REDOP_LAST;
-    if (has_value) {
+    range_size = range_max - range_min + 1;
+    launch_domain = Rect<1>(Point<1>(range_min), Point<1>(range_max));
+    LOG_ONCE(log_fuzz.info() << "  Launch domain: " << launch_domain);
+  }
+
+  void select_scalar_reduction(const uint64_t seed, uint64_t &seq) {
+    scalar_redop = LEGION_REDOP_LAST;
+    if (task_produces_value) {
       switch (uniform_range(seed, seq++, 0, 4)) {
         case 0: {
           scalar_redop = LEGION_REDOP_SUM_INT64;
@@ -270,31 +317,31 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
           abort();
       }
       LOG_ONCE(log_fuzz.info() << "  Scalar redop: " << scalar_redop);
+
+      scalar_reduction_ordered = uniform_range(seed, seq++, 0, 2) == 0;
+      LOG_ONCE(log_fuzz.info() << "    Ordered: " << scalar_reduction_ordered);
     }
+  }
 
-    // Step 4. Choose whether scalar reductions should be ordered.
-    bool scalar_ordered = uniform_range(seed, seq++, 0, 2) == 0;
-    LOG_ONCE(log_fuzz.info() << "  Scalar reduction is ordered: " << scalar_ordered);
+  void select_elide_future_return(const uint64_t seed, uint64_t &seq) {
+    elide_future_return = uniform_range(seed, seq++, 0, 2) == 0;
+    LOG_ONCE(log_fuzz.info() << "  Elide future return: " << elide_future_return);
+  }
 
-    // Step 5. Choose whether to elide future return.
-    bool elide_return = uniform_range(seed, seq++, 0, 2) == 0;
-    LOG_ONCE(log_fuzz.info() << "  Elide future return: " << elide_return);
+  void select_fields(const uint64_t seed, uint64_t &seq) {
+    fields.clear();
 
-    // Step 6. Choose fields.
-    std::vector<FieldID> fields;
-    {
-      uint64_t field_set =
-          uniform_range(seed, seq++, 0, 1 << config.region_tree_num_fields);
-      LOG_ONCE(log_fuzz.info() << "  Field set: 0x" << std::hex << field_set);
-      for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
-        if ((field_set & (1 << field)) != 0) {
-          fields.push_back(field);
-        }
+    uint64_t field_set =
+        uniform_range(seed, seq++, 0, 1 << config.region_tree_num_fields);
+    LOG_ONCE(log_fuzz.info() << "  Field set: 0x" << std::hex << field_set);
+    for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
+      if ((field_set & (1 << field)) != 0) {
+        fields.push_back(field);
       }
     }
+  }
 
-    // Step 7. Choose privilege.
-    PrivilegeMode privilege;
+  void select_privilege(const uint64_t seed, uint64_t &seq) {
     switch (uniform_range(seed, seq++, 0, 4)) {
       case 0: {
         privilege = LEGION_READ_ONLY;
@@ -312,9 +359,10 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
         abort();
     }
     LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
+  }
 
-    // Step 8. Choose reduction.
-    ReductionOpID redop = LEGION_REDOP_LAST;
+  void select_reduction(const uint64_t seed, uint64_t &seq) {
+    redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
       switch (uniform_range(seed, seq++, 0, 4)) {
         case 0: {
@@ -334,30 +382,44 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
       }
       LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop);
     }
+  }
 
-    // Step 9. Choose the launch type.
-    uint64_t launch_type = uniform_range(seed, seq++, 0, 2);
+  void select_launch_type(const uint64_t seed, uint64_t &seq) {
+    launch_type = uniform_range(seed, seq++, 0, 2);
+  }
+
+  void select_projection(const uint64_t seed, uint64_t &seq) {
+    projection_offset = 0;
+    if (launch_type == 1) {
+      projection_offset = uniform_range(seed, seq++, 0, config.region_tree_width);
+      LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << projection_offset);
+    }
+  }
+
+  void execute(std::vector<Future> &futures) {
     if (launch_type == 0) {
       LOG_ONCE(log_fuzz.info() << "  Launch type: index space");
-      IndexTaskLauncher launcher(task_id, domain, TaskArgument(), ArgumentMap());
+      IndexTaskLauncher launcher(task_id, launch_domain, TaskArgument(), ArgumentMap());
       if (!fields.empty()) {
         if (privilege == LEGION_REDUCE) {
           launcher.add_region_requirement(
-              RegionRequirement(lpart, 0, std::set<FieldID>(fields.begin(), fields.end()),
-                                fields, redop, EXCLUSIVE, tree));
+              RegionRequirement(forest.get_disjoint_partition(), 0,
+                                std::set<FieldID>(fields.begin(), fields.end()), fields,
+                                redop, EXCLUSIVE, forest.get_root()));
         } else {
           launcher.add_region_requirement(
-              RegionRequirement(lpart, 0, std::set<FieldID>(fields.begin(), fields.end()),
-                                fields, privilege, EXCLUSIVE, tree));
+              RegionRequirement(forest.get_disjoint_partition(), 0,
+                                std::set<FieldID>(fields.begin(), fields.end()), fields,
+                                privilege, EXCLUSIVE, forest.get_root()));
         }
       }
-      if (elide_return) {
+      if (elide_future_return) {
         launcher.elide_future_return = true;
       }
-      if (has_value) {
-        Future result =
-            runtime->execute_index_space(ctx, launcher, scalar_redop, scalar_ordered);
-        if (!elide_return) {
+      if (task_produces_value) {
+        Future result = runtime->execute_index_space(ctx, launcher, scalar_redop,
+                                                     scalar_reduction_ordered);
+        if (!elide_future_return) {
           futures.push_back(result);
         }
       } else {
@@ -366,36 +428,33 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     } else {
       LOG_ONCE(log_fuzz.info() << "  Launch type: individual tasks");
 
-      // Just to really mess with things, when we do individual launches,
-      // shift the shard space points over by a random amount
-      uint64_t offset = uniform_range(seed, seq++, 0, config.region_tree_width);
-      LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << offset);
-
       for (uint64_t point = range_min; point <= range_max; ++point) {
         TaskLauncher launcher(task_id, TaskArgument());
-        launcher.point = Point<1>((point - range_min + offset) % range_size + range_min);
+        launcher.point =
+            Point<1>((point - range_min + projection_offset) % range_size + range_min);
         LOG_ONCE(log_fuzz.info() << "  Task: " << point);
         LOG_ONCE(log_fuzz.info() << "    Shard point: " << launcher.point);
-        IndexSpaceT<1> launch_space = runtime->create_index_space<1>(ctx, domain);
+        IndexSpaceT<1> launch_space = runtime->create_index_space<1>(ctx, launch_domain);
         launcher.sharding_space = launch_space;
         if (!fields.empty()) {
-          LogicalRegion subregion = runtime->get_logical_subregion_by_color(lpart, point);
+          LogicalRegion subregion = runtime->get_logical_subregion_by_color(
+              forest.get_disjoint_partition(), point);
           if (privilege == LEGION_REDUCE) {
             launcher.add_region_requirement(RegionRequirement(
                 subregion, std::set<FieldID>(fields.begin(), fields.end()), fields, redop,
-                EXCLUSIVE, tree));
+                EXCLUSIVE, forest.get_root()));
           } else {
             launcher.add_region_requirement(RegionRequirement(
                 subregion, std::set<FieldID>(fields.begin(), fields.end()), fields,
-                privilege, EXCLUSIVE, tree));
+                privilege, EXCLUSIVE, forest.get_root()));
           }
         }
-        if (elide_return) {
+        if (elide_future_return) {
           launcher.elide_future_return = true;
         }
-        if (has_value) {
+        if (task_produces_value) {
           Future result = runtime->execute_task(ctx, launcher);
-          if (!elide_return) {
+          if (!elide_future_return) {
             futures.push_back(result);
           }
         } else {
@@ -406,14 +465,76 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     }
   }
 
+private:
+  Runtime *runtime;
+  Context ctx;
+  const FuzzerConfig &config;
+  const RegionForest<1> &forest;
+  TaskID task_id;
+  bool task_produces_value;
+  bool launch_complete;
+  uint64_t range_min;
+  uint64_t range_max;
+  uint64_t range_size;
+  Rect<1> launch_domain;
+  ReductionOpID scalar_redop;
+  bool scalar_reduction_ordered;
+  bool elide_future_return;
+  std::vector<FieldID> fields;
+  PrivilegeMode privilege;
+  ReductionOpID redop = LEGION_REDOP_LAST;
+  uint64_t launch_type;
+  uint64_t projection_offset;
+};
+
+void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
+               Runtime *runtime) {
+  InputArgs args = Runtime::get_input_args();
+  FuzzerConfig config = FuzzerConfig::parse_args(args.argc, args.argv);
+  config.log_config(runtime, ctx);
+
+  RegionForest<1> forest(runtime, ctx, config);
+
+  std::vector<Future> futures;
+
+  const uint64_t seed = config.initial_seed;
+  uint64_t seq = 0;
+  for (uint64_t op_idx = 0; op_idx < config.num_ops; ++op_idx) {
+    LOG_ONCE(log_fuzz.info() << "Operation: " << op_idx);
+
+    Operation op(runtime, ctx, config, forest);
+
+    // Step 1. Choose a random task to run.
+    op.select_task_id(seed, seq);
+
+    // Step 2. Choose launch domain.
+    op.select_launch_domain(seed, seq);
+
+    // Step 3. Choose scalar reduction.
+    op.select_scalar_reduction(seed, seq);
+
+    // Step 5. Choose whether to elide future return.
+    op.select_elide_future_return(seed, seq);
+
+    // Step 6. Choose fields.
+    op.select_fields(seed, seq);
+
+    // Step 7. Choose privilege.
+    op.select_privilege(seed, seq);
+
+    // Step 8. Choose reduction.
+    op.select_reduction(seed, seq);
+
+    // Step 9. Choose the launch type.
+    op.select_launch_type(seed, seq);
+    op.select_projection(seed, seq);
+    op.execute(futures);
+  }
+
   for (Future &future : futures) {
     int64_t result = future.get_result<int64_t>();
     LOG_ONCE(log_fuzz.info() << "Future result: " << result);
   }
-
-  runtime->destroy_logical_region(ctx, tree);
-  runtime->destroy_field_space(ctx, fspace);
-  runtime->destroy_index_space(ctx, ispace);
 }
 
 int main(int argc, char **argv) {
