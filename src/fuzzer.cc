@@ -118,8 +118,9 @@ static void gen_bits(const uint8_t *input, size_t input_bytes, uint8_t *output,
   siphash(input, input_bytes, k, output, output_bytes);
 }
 
-static uint64_t uniform_uint64_t(uint64_t seed, uint64_t sequence_number) {
-  const uint64_t input[2] = {seed, sequence_number};
+static uint64_t uniform_uint64_t(uint64_t seed, uint64_t stream,
+                                 uint64_t sequence_number) {
+  const uint64_t input[3] = {seed, stream, sequence_number};
   uint64_t result;
   gen_bits(reinterpret_cast<const uint8_t *>(&input), sizeof(input),
            reinterpret_cast<uint8_t *>(&result), sizeof(result));
@@ -128,8 +129,8 @@ static uint64_t uniform_uint64_t(uint64_t seed, uint64_t sequence_number) {
 
 static bool is_power_of_2(uint64_t value) { return (value & (value - 1)) == 0; }
 
-static uint64_t uniform_range(uint64_t seed, uint64_t sequence_number, uint64_t range_lo,
-                              uint64_t range_hi /* exclusive */) {
+static uint64_t uniform_range(uint64_t seed, uint64_t stream, uint64_t sequence_number,
+                              uint64_t range_lo, uint64_t range_hi /* exclusive */) {
   if (range_hi <= range_lo) {
     return range_lo;
   }
@@ -141,7 +142,7 @@ static uint64_t uniform_range(uint64_t seed, uint64_t sequence_number, uint64_t 
     abort();
   }
 
-  uint64_t random = uniform_uint64_t(seed, sequence_number);
+  uint64_t random = uniform_uint64_t(seed, stream, sequence_number);
   return range_lo + (random % range_size);
 }
 
@@ -179,12 +180,41 @@ int64_t int64_replicable_inner(const Task *task,
   return 4;
 }
 
+struct ColorPointsArgs {
+  uint64_t seed;
+  uint64_t stream;
+  uint64_t region_tree_width;
+};
+
 void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regions,
-                       Context ctx, Runtime *runtime) {}
+                       Context ctx, Runtime *runtime) {
+  assert(task->arglen == sizeof(ColorPointsArgs));
+  const ColorPointsArgs args = *reinterpret_cast<ColorPointsArgs *>(task->args);
+  const uint64_t seed = args.seed;
+  const uint64_t stream = args.stream;
+  const uint64_t region_tree_width = args.region_tree_width;
+  uint64_t seq = 0;
+
+  PhysicalRegion pr = regions[0];
+  std::vector<FieldID> fields;
+  pr.get_fields(fields);
+
+  DomainT<1> domain = runtime->get_index_space_domain(
+      ctx, IndexSpaceT<1>(pr.get_logical_region().get_index_space()));
+
+  for (FieldID field : fields) {
+    const FieldAccessor<READ_WRITE, Point<1>, 1> acc(pr, field);
+    for (PointInDomainIterator<1> pir(domain); pir(); pir++) {
+      uint64_t color = uniform_range(seed, stream, seq++, 0, region_tree_width);
+      acc[*pir] = color;
+    }
+  }
+}
 
 class RegionForest {
 public:
-  RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config)
+  RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config,
+               const uint64_t seed, uint64_t &stream)
       : runtime(_runtime), ctx(_ctx) {
     ispace = runtime->create_index_space<1>(
         ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width *
@@ -223,7 +253,7 @@ public:
           colors.push_back(fid++);
         }
 
-        color_points(colors);
+        color_points(colors, config, seed, stream);
 
         std::vector<IndexPartition> color_parts;
         for (FieldID color : colors) {
@@ -262,6 +292,7 @@ public:
     runtime->destroy_logical_region(ctx, root);
     runtime->destroy_field_space(ctx, fspace);
     runtime->destroy_index_space(ctx, ispace);
+    runtime->destroy_index_space(ctx, color_space);
   }
 
   LogicalRegion get_root() const { return root; }
@@ -274,8 +305,13 @@ public:
   ReductionOpID get_last_redop() const { return last_redop; }
 
 private:
-  void color_points(const std::vector<FieldID> &colors) {
-    TaskLauncher launcher(COLOR_POINTS_TASK_ID, TaskArgument());
+  void color_points(const std::vector<FieldID> &colors, const FuzzerConfig &config,
+                    const uint64_t seed, uint64_t &stream) {
+    ColorPointsArgs args;
+    args.seed = seed;
+    args.stream = stream;
+    args.region_tree_width = config.region_tree_width;
+    TaskLauncher launcher(COLOR_POINTS_TASK_ID, TaskArgument(&args, sizeof(args)));
     launcher.add_region_requirement(
         RegionRequirement(root, std::set<FieldID>(colors.begin(), colors.end()), colors,
                           WRITE_DISCARD, EXCLUSIVE, root));
@@ -301,11 +337,11 @@ public:
                      RegionForest &_forest)
       : runtime(_runtime), ctx(_ctx), config(_config), forest(_forest) {}
 
-  void select_fields(const uint64_t seed, uint64_t &seq) {
+  void select_fields(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
     fields.clear();
 
     uint64_t field_set =
-        uniform_range(seed, seq++, 0, 1 << config.region_tree_num_fields);
+        uniform_range(seed, stream, seq++, 0, 1 << config.region_tree_num_fields);
     LOG_ONCE(log_fuzz.info() << "  Field set: 0x" << std::hex << field_set);
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
       if ((field_set & (1 << field)) != 0) {
@@ -314,8 +350,8 @@ public:
     }
   }
 
-  void select_privilege(const uint64_t seed, uint64_t &seq) {
-    switch (uniform_range(seed, seq++, 0, 4)) {
+  void select_privilege(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
+    switch (uniform_range(seed, stream, seq++, 0, 4)) {
       case 0: {
         privilege = LEGION_READ_ONLY;
       } break;
@@ -334,7 +370,8 @@ public:
     LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
   }
 
-  void select_reduction(const uint64_t seed, uint64_t &seq, bool launch_complete) {
+  void select_reduction(const uint64_t seed, const uint64_t stream, uint64_t &seq,
+                        bool launch_complete) {
     redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
       if (forest.get_last_redop() != LEGION_REDOP_LAST) {
@@ -342,7 +379,7 @@ public:
         // same reduction operator again.
         redop = forest.get_last_redop();
       } else {
-        switch (uniform_range(seed, seq++, 0, 4)) {
+        switch (uniform_range(seed, stream, seq++, 0, 4)) {
           case 0: {
             redop = LEGION_REDOP_SUM_INT64;
           } break;
@@ -427,8 +464,8 @@ public:
         launch_domain(Rect<1>::make_empty()),
         req(_runtime, _ctx, _config, _forest) {}
 
-  void select_launch_type(const uint64_t seed, uint64_t &seq) {
-    switch (uniform_range(seed, seq++, 0, 2)) {
+  void select_launch_type(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
+    switch (uniform_range(seed, stream, seq++, 0, 2)) {
       case 0: {
         launch_type = LaunchType::SINGLE_TASK;
         LOG_ONCE(log_fuzz.info() << "  Launch type: single task");
@@ -442,8 +479,8 @@ public:
     }
   }
 
-  void select_task_id(const uint64_t seed, uint64_t &seq) {
-    switch (uniform_range(seed, seq++, 0, 4) & 3) {
+  void select_task_id(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
+    switch (uniform_range(seed, stream, seq++, 0, 4) & 3) {
       case 0: {
         task_id = VOID_LEAF_TASK_ID;
         task_produces_value = false;
@@ -466,18 +503,18 @@ public:
     LOG_ONCE(log_fuzz.info() << "  Task ID: " << task_id);
   }
 
-  void select_launch_domain(const uint64_t seed, uint64_t &seq) {
+  void select_launch_domain(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
     // A lot of Legion algorithms hinge on whether a launch is
     // complete or not, so we'll make that a special case here.
 
-    launch_complete = uniform_range(seed, seq++, 0, 2) == 0;
+    launch_complete = uniform_range(seed, stream, seq++, 0, 2) == 0;
 
     if (launch_complete) {
       range_min = 0;
       range_max = config.region_tree_width;
     } else {
-      range_min = uniform_range(seed, seq++, 0, config.region_tree_width);
-      range_max = uniform_range(seed, seq++, 0, config.region_tree_width);
+      range_min = uniform_range(seed, stream, seq++, 0, config.region_tree_width);
+      range_max = uniform_range(seed, stream, seq++, 0, config.region_tree_width);
       // Make sure the range is always non-empty.
       if (range_max < range_min) {
         std::swap(range_min, range_max);
@@ -489,10 +526,11 @@ public:
     LOG_ONCE(log_fuzz.info() << "  Launch domain: " << launch_domain);
   }
 
-  void select_scalar_reduction(const uint64_t seed, uint64_t &seq) {
+  void select_scalar_reduction(const uint64_t seed, const uint64_t stream,
+                               uint64_t &seq) {
     scalar_redop = LEGION_REDOP_LAST;
     if (launch_type == LaunchType::INDEX_TASK && task_produces_value) {
-      switch (uniform_range(seed, seq++, 0, 4)) {
+      switch (uniform_range(seed, stream, seq++, 0, 4)) {
         case 0: {
           scalar_redop = LEGION_REDOP_SUM_INT64;
         } break;
@@ -510,26 +548,28 @@ public:
       }
       LOG_ONCE(log_fuzz.info() << "  Scalar redop: " << scalar_redop);
 
-      scalar_reduction_ordered = uniform_range(seed, seq++, 0, 2) == 0;
+      scalar_reduction_ordered = uniform_range(seed, stream, seq++, 0, 2) == 0;
       LOG_ONCE(log_fuzz.info() << "    Ordered: " << scalar_reduction_ordered);
     }
   }
 
-  void select_elide_future_return(const uint64_t seed, uint64_t &seq) {
-    elide_future_return = uniform_range(seed, seq++, 0, 2) == 0;
+  void select_elide_future_return(const uint64_t seed, const uint64_t stream,
+                                  uint64_t &seq) {
+    elide_future_return = uniform_range(seed, stream, seq++, 0, 2) == 0;
     LOG_ONCE(log_fuzz.info() << "  Elide future return: " << elide_future_return);
   }
 
-  void select_region_requirement(const uint64_t seed, uint64_t &seq) {
-    req.select_fields(seed, seq);
-    req.select_privilege(seed, seq);
-    req.select_reduction(seed, seq, launch_complete);
+  void select_region_requirement(const uint64_t seed, const uint64_t stream,
+                                 uint64_t &seq) {
+    req.select_fields(seed, stream, seq);
+    req.select_privilege(seed, stream, seq);
+    req.select_reduction(seed, stream, seq, launch_complete);
   }
 
-  void select_projection(const uint64_t seed, uint64_t &seq) {
+  void select_projection(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
     projection_offset = 0;
     if (launch_type == LaunchType::SINGLE_TASK) {
-      projection_offset = uniform_range(seed, seq++, 0, config.region_tree_width);
+      projection_offset = uniform_range(seed, stream, seq++, 0, config.region_tree_width);
       LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << projection_offset);
     }
   }
@@ -615,23 +655,26 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
   FuzzerConfig config = FuzzerConfig::parse_args(args.argc, args.argv);
   config.log_config(runtime, ctx);
 
-  RegionForest forest(runtime, ctx, config);
+  const uint64_t seed = config.initial_seed;
+
+  uint64_t next_stream = 0;
+  const uint64_t stream = next_stream++;
+
+  RegionForest forest(runtime, ctx, config, seed, next_stream);
 
   std::vector<Future> futures;
-
-  const uint64_t seed = config.initial_seed;
   uint64_t seq = 0;
   for (uint64_t op_idx = 0; op_idx < config.num_ops; ++op_idx) {
     LOG_ONCE(log_fuzz.info() << "Operation: " << op_idx);
 
     OperationBuilder op(runtime, ctx, config, forest);
-    op.select_launch_type(seed, seq);
-    op.select_task_id(seed, seq);
-    op.select_launch_domain(seed, seq);
-    op.select_scalar_reduction(seed, seq);
-    op.select_elide_future_return(seed, seq);
-    op.select_region_requirement(seed, seq);
-    op.select_projection(seed, seq);
+    op.select_launch_type(seed, stream, seq);
+    op.select_task_id(seed, stream, seq);
+    op.select_launch_domain(seed, stream, seq);
+    op.select_scalar_reduction(seed, stream, seq);
+    op.select_elide_future_return(seed, stream, seq);
+    op.select_region_requirement(seed, stream, seq);
+    op.select_projection(seed, stream, seq);
     op.execute(futures);
   }
 
