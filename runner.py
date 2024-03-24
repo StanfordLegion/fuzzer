@@ -29,11 +29,9 @@ def run_fuzzer(seed, num_ops, fuzzer_exe, skip=None):
     return proc
 
 
-def bisect_start(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose):
+def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
     if verbose >= 2:
-        print(
-            f"[{thread_index} of {thread_count}]: Bisecting {num_ops} ops at seed {seed} to find shortest failure"
-        )
+        print(f"[{tid} of {tnum}]: Bisecting {num_ops} ops at seed {seed}")
     good = num_ops
     bad = 0
     last_failure = None
@@ -41,7 +39,7 @@ def bisect_start(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose)
         check = (good + bad) // 2
         if verbose >= 2:
             print(
-                f"[{thread_index} of {thread_count}]: Testing {num_ops} ops (skipping {check}) at seed {seed}"
+                f"[{tid} of {tnum}]: Testing {num_ops} ops (skipping {check}) at seed {seed}"
             )
         proc = run_fuzzer(seed, num_ops, fuzzer_exe, skip=check)
         if proc is None:
@@ -52,20 +50,16 @@ def bisect_start(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose)
     return bad, last_failure
 
 
-def bisect_stop(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose):
+def bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
     if verbose >= 2:
-        print(
-            f"[{thread_index} of {thread_count}]: Bisecting {num_ops} ops at seed {seed} to find shortest failure"
-        )
+        print(f"[{tid} of {tnum}]: Bisecting {num_ops} ops at seed {seed}")
     good = 0
     bad = num_ops
     last_failure = None
     while good + 1 < bad:
         check = (good + bad) // 2
         if verbose >= 2:
-            print(
-                f"[{thread_index} of {thread_count}]: Testing {check} ops at seed {seed}"
-            )
+            print(f"[{tid} of {tnum}]: Testing {check} ops at seed {seed}")
         proc = run_fuzzer(seed, check, fuzzer_exe)
         if proc is None:
             good = check
@@ -75,35 +69,25 @@ def bisect_stop(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose):
     return bad, last_failure
 
 
-def fuzz(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose):
+def fuzz(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
     if verbose >= 2:
-        print(
-            f"[{thread_index} of {thread_count}]: Testing {num_ops} ops at seed {seed}"
-        )
+        print(f"[{tid} of {tnum}]: Testing {num_ops} ops at seed {seed}")
     proc = run_fuzzer(seed, num_ops, fuzzer_exe)
     if proc is None:
         return
     if verbose >= 1:
-        print(
-            f"[{thread_index} of {thread_count}]: Found failure: {shlex.join(proc.args)}"
-        )
-    stop, stop_proc = bisect_stop(
-        thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose
-    )
-    start, start_proc = bisect_start(
-        thread_index, thread_count, seed, stop, fuzzer_exe, verbose
-    )
+        print(f"[{tid} of {tnum}]: Found failure: {shlex.join(proc.args)}")
+    stop, stop_proc = bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, verbose)
+    start, start_proc = bisect_start(tid, tnum, seed, stop, fuzzer_exe, verbose)
     proc = start_proc or stop_proc or proc
     if verbose >= 1:
-        print(
-            f"[{thread_index} of {thread_count}]: Shortest failure for this seed: {shlex.join(proc.args)}"
-        )
+        print(f"[{tid} of {tnum}]: Shortest failure: {shlex.join(proc.args)}")
     return proc
 
 
 def run_test(
-    thread_index,
-    thread_count,
+    tid,
+    tnum,
     num_tests,
     num_ops,
     base_seed,
@@ -112,12 +96,12 @@ def run_test(
     verbose,
 ):
     if verbose >= 1:
-        print(f"[{thread_index} of {thread_count}]: Starting search")
-    initial_seed = base_seed + thread_index
+        print(f"[{tid} of {tnum}]: Starting search")
+    initial_seed = base_seed + tid
     failed_procs = []
     for test_index in range(num_tests):
-        seed = initial_seed + test_index * thread_count
-        proc = fuzz(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose)
+        seed = initial_seed + test_index * tnum
+        proc = fuzz(tid, tnum, seed, num_ops, fuzzer_exe, verbose)
         if proc:
             failed_procs.append(proc)
     return failed_procs
@@ -139,7 +123,7 @@ def run_tests(
 
     result_queue = queue.Queue()
     num_queued = 0
-    for thread_index in range(thread_count):
+    for tid in range(thread_count):
         num_queued += 1
 
         def callback(r):
@@ -152,7 +136,7 @@ def run_tests(
         thread_pool.apply_async(
             run_test,
             (
-                thread_index,
+                tid,
                 thread_count,
                 num_tests,
                 num_ops,
