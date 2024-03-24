@@ -32,6 +32,7 @@ enum TaskIDs {
   INT64_REPLICABLE_LEAF_TASK_ID,
   VOID_REPLICABLE_INNER_TASK_ID,
   INT64_REPLICABLE_INNER_TASK_ID,
+  COLOR_POINTS_TASK_ID,
   TOP_LEVEL_TASK_ID,
 };
 
@@ -61,19 +62,13 @@ static uint64_t parse_uint64_t(const std::string &flag, const std::string &arg) 
 }
 
 struct FuzzerConfig {
-  uint64_t initial_seed;
-  uint64_t region_tree_depth;
-  uint64_t region_tree_width;
-  uint64_t region_tree_branch_factor;
-  uint64_t region_tree_num_fields;
-  uint64_t num_ops;
-  FuzzerConfig()
-      : initial_seed(0),
-        region_tree_depth(1),
-        region_tree_width(4),
-        region_tree_branch_factor(1),
-        region_tree_num_fields(4),
-        num_ops(1) {}
+  uint64_t initial_seed = 0;
+  uint64_t region_tree_depth = 1;
+  uint64_t region_tree_width = 4;
+  uint64_t region_tree_branch_factor = 4;
+  uint64_t region_tree_size_factor = 4;
+  uint64_t region_tree_num_fields = 4;
+  uint64_t num_ops = 1;
 
   static FuzzerConfig parse_args(int argc, char **argv) {
     FuzzerConfig config;
@@ -184,24 +179,78 @@ int64_t int64_replicable_inner(const Task *task,
   return 4;
 }
 
-template <int N>
+void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regions,
+                       Context ctx, Runtime *runtime) {}
+
 class RegionForest {
 public:
   RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config)
       : runtime(_runtime), ctx(_ctx) {
     ispace = runtime->create_index_space<1>(
-        ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width)));
+        ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width *
+                                           config.region_tree_size_factor)));
+
     fspace = runtime->create_field_space(ctx);
+    FieldAllocator falloc = runtime->create_field_allocator(ctx, fspace);
+    uint64_t num_fields = config.region_tree_num_fields;
+    uint64_t branch_factor = config.region_tree_branch_factor;
     {
-      FieldAllocator falloc = runtime->create_field_allocator(ctx, fspace);
-      for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
-        falloc.allocate_field(sizeof(uint64_t), field);
+      FieldID fid = 0;
+      for (uint64_t field = 0; field < num_fields; ++field) {
+        falloc.allocate_field(sizeof(uint64_t), fid++);
+      }
+      for (uint64_t num_colors = 1; num_colors < branch_factor; ++num_colors) {
+        for (uint64_t color = 0; color < num_colors; ++color) {
+          falloc.allocate_field(sizeof(Point<1>), fid++);
+        }
       }
     }
     root = runtime->create_logical_region(ctx, ispace, fspace);
 
-    // Make some partitions we know will be disjoint.
-    disjoint_partitions.push_back(runtime->create_equal_partition(ctx, ispace, ispace));
+    color_space = runtime->create_index_space<1>(
+        ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width)));
+
+    // Always make an equal partition first.
+    disjoint_partitions.push_back(
+        runtime->create_equal_partition(ctx, ispace, color_space));
+
+    // After this we make progressive colored regions.
+    {
+      FieldID fid = num_fields;
+      for (uint64_t num_colors = 1; num_colors < branch_factor; ++num_colors) {
+        std::vector<FieldID> colors;
+        for (uint64_t color = 0; color < num_colors; ++color) {
+          colors.push_back(fid++);
+        }
+
+        color_points(colors);
+
+        std::vector<IndexPartition> color_parts;
+        for (FieldID color : colors) {
+          color_parts.push_back(
+              runtime->create_partition_by_field(ctx, root, root, color, color_space));
+        }
+
+        if (color_parts.size() == 1) {
+          disjoint_partitions.push_back(color_parts[0]);
+        } else {
+          IndexPartition part =
+              runtime->create_pending_partition(ctx, ispace, color_space);
+          for (uint64_t point = 0; point < config.region_tree_width; ++point) {
+            std::vector<IndexSpace> subspaces;
+            for (IndexPartition color_part : color_parts) {
+              subspaces.push_back(runtime->get_index_subspace(color_part, point));
+            }
+            runtime->create_index_space_union(ctx, part, Point<1>(point), subspaces);
+          }
+          aliased_partitions.push_back(part);
+        }
+
+        for (FieldID color : colors) {
+          falloc.free_field(color);
+        }
+      }
+    }
 
     // Initialize everything so we don't get unitialized read warnings
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
@@ -225,19 +274,31 @@ public:
   ReductionOpID get_last_redop() const { return last_redop; }
 
 private:
+  void color_points(const std::vector<FieldID> &colors) {
+    TaskLauncher launcher(COLOR_POINTS_TASK_ID, TaskArgument());
+    launcher.add_region_requirement(
+        RegionRequirement(root, std::set<FieldID>(colors.begin(), colors.end()), colors,
+                          WRITE_DISCARD, EXCLUSIVE, root));
+    launcher.elide_future_return = true;
+    runtime->execute_task(ctx, launcher);
+  }
+
+private:
   Runtime *runtime;
   Context ctx;
-  IndexSpaceT<N> ispace;
+  IndexSpaceT<1> ispace;
   FieldSpace fspace;
   LogicalRegion root;
+  IndexSpaceT<1> color_space;
   std::vector<IndexPartition> disjoint_partitions;
+  std::vector<IndexPartition> aliased_partitions;
   ReductionOpID last_redop = LEGION_REDOP_LAST;
 };
 
 class RequirementBuilder {
 public:
   RequirementBuilder(Runtime *_runtime, Context _ctx, const FuzzerConfig &_config,
-                     RegionForest<1> &_forest)
+                     RegionForest &_forest)
       : runtime(_runtime), ctx(_ctx), config(_config), forest(_forest) {}
 
   void select_fields(const uint64_t seed, uint64_t &seq) {
@@ -344,7 +405,7 @@ private:
   Runtime *runtime;
   Context ctx;
   const FuzzerConfig &config;
-  RegionForest<1> &forest;
+  RegionForest &forest;
   std::vector<FieldID> fields;
   PrivilegeMode privilege = LEGION_NO_ACCESS;
   ReductionOpID redop = LEGION_REDOP_LAST;
@@ -359,7 +420,7 @@ enum class LaunchType {
 class OperationBuilder {
 public:
   OperationBuilder(Runtime *_runtime, Context _ctx, const FuzzerConfig &_config,
-                   RegionForest<1> &_forest)
+                   RegionForest &_forest)
       : runtime(_runtime),
         ctx(_ctx),
         config(_config),
@@ -554,7 +615,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
   FuzzerConfig config = FuzzerConfig::parse_args(args.argc, args.argv);
   config.log_config(runtime, ctx);
 
-  RegionForest<1> forest(runtime, ctx, config);
+  RegionForest forest(runtime, ctx, config);
 
   std::vector<Future> futures;
 
@@ -588,6 +649,13 @@ int main(int argc, char **argv) {
     registrar.set_inner();
     registrar.set_replicable();
     Runtime::preregister_task_variant<top_level>(registrar, "top_level");
+  }
+
+  {
+    TaskVariantRegistrar registrar(COLOR_POINTS_TASK_ID, "color_points");
+    registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
+    registrar.set_leaf();
+    Runtime::preregister_task_variant<color_points_task>(registrar, "color_points");
   }
 
   {
