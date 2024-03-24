@@ -15,21 +15,59 @@
 # limitations under the License.
 #
 
-import argparse, multiprocessing, os, queue, shlex, subprocess
+import argparse, glob, multiprocessing, os, queue, shlex, shutil, subprocess, tempfile
 
 
-def run_fuzzer(seed, num_ops, fuzzer_exe, skip=None):
-    cmd = [fuzzer_exe, "-fuzz:seed", str(seed), "-fuzz:ops", str(num_ops)]
-    if skip is not None:
-        cmd.extend(["-fuzz:skip", str(skip)])
-    cmd.extend(["-level", "4"])
+def run_spy(tid, tnum, spy, logfiles, verbose):
+    cmd = [
+        "pypy3",
+        spy,
+        "--logical",
+        "--physical",
+        "--cycle",
+        # "--sanity", # FIXME: This breaks on several test cases.
+        "--leaks",
+        # "--geometry", # FIXME: This is *very* slow.
+        "--assert-error",
+        "--assert-warning",
+    ] + logfiles
+    if verbose >= 3:
+        print(f"[{tid} of {tnum}]: Running {shlex.join(cmd)}")
     proc = subprocess.run(cmd, capture_output=True)
     if proc.returncode == 0:
         return
     return proc
 
 
-def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
+def run_fuzzer(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose, skip=None):
+    cmd = [fuzzer_exe, "-fuzz:seed", str(seed), "-fuzz:ops", str(num_ops)]
+    if skip is not None:
+        cmd.extend(["-fuzz:skip", str(skip)])
+    if spy:
+        log_dir = tempfile.mkdtemp(dir=os.getcwd())
+        cmd.extend(
+            ["-level", "legion_spy=2", "-logfile", os.path.join(log_dir, "spy_%.log")]
+        )
+    else:
+        cmd.extend(["-level", "4"])
+    if verbose >= 3:
+        print(f"[{tid} of {tnum}]: Running {shlex.join(cmd)}")
+    proc = subprocess.run(cmd, capture_output=True)
+    if proc.returncode == 0:
+        spy_proc = None
+        if spy:
+            spy_logs = glob.glob(os.path.join(log_dir, "spy_*.log"))
+            spy_proc = run_spy(tid, tnum, spy, spy_logs, verbose)
+            shutil.rmtree(log_dir)
+        if spy_proc is None:
+            return
+        return (proc, spy_proc)
+    if spy:
+        shutil.rmtree(log_dir)
+    return (proc, None)
+
+
+def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
     if verbose >= 2:
         print(f"[{tid} of {tnum}]: Bisecting {num_ops} ops at seed {seed}")
     good = num_ops
@@ -41,7 +79,9 @@ def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
             print(
                 f"[{tid} of {tnum}]: Testing {num_ops} ops (skipping {check}) at seed {seed}"
             )
-        proc = run_fuzzer(seed, num_ops, fuzzer_exe, skip=check)
+        proc = run_fuzzer(
+            tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose, skip=check
+        )
         if proc is None:
             good = check
         else:
@@ -50,7 +90,7 @@ def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
     return bad, last_failure
 
 
-def bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
+def bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
     if verbose >= 2:
         print(f"[{tid} of {tnum}]: Bisecting {num_ops} ops at seed {seed}")
     good = 0
@@ -60,7 +100,7 @@ def bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
         check = (good + bad) // 2
         if verbose >= 2:
             print(f"[{tid} of {tnum}]: Testing {check} ops at seed {seed}")
-        proc = run_fuzzer(seed, check, fuzzer_exe)
+        proc = run_fuzzer(tid, tnum, seed, check, fuzzer_exe, spy, verbose)
         if proc is None:
             good = check
         else:
@@ -69,19 +109,19 @@ def bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
     return bad, last_failure
 
 
-def fuzz(tid, tnum, seed, num_ops, fuzzer_exe, verbose):
+def fuzz(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
     if verbose >= 2:
         print(f"[{tid} of {tnum}]: Testing {num_ops} ops at seed {seed}")
-    proc = run_fuzzer(seed, num_ops, fuzzer_exe)
+    proc = run_fuzzer(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose)
     if proc is None:
         return
     if verbose >= 1:
-        print(f"[{tid} of {tnum}]: Found failure: {shlex.join(proc.args)}")
-    stop, stop_proc = bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, verbose)
-    start, start_proc = bisect_start(tid, tnum, seed, stop, fuzzer_exe, verbose)
+        print(f"[{tid} of {tnum}]: Found failure: {shlex.join(proc[0].args)}")
+    stop, stop_proc = bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose)
+    start, start_proc = bisect_start(tid, tnum, seed, stop, fuzzer_exe, spy, verbose)
     proc = start_proc or stop_proc or proc
     if verbose >= 1:
-        print(f"[{tid} of {tnum}]: Shortest failure: {shlex.join(proc.args)}")
+        print(f"[{tid} of {tnum}]: Shortest failure: {shlex.join(proc[0].args)}")
     return proc
 
 
@@ -92,7 +132,7 @@ def run_test(
     num_ops,
     base_seed,
     fuzzer_exe,
-    spy_script,
+    spy,
     verbose,
 ):
     if verbose >= 1:
@@ -101,21 +141,23 @@ def run_test(
     failed_procs = []
     for test_index in range(num_tests):
         seed = initial_seed + test_index * tnum
-        proc = fuzz(tid, tnum, seed, num_ops, fuzzer_exe, verbose)
+        proc = fuzz(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose)
         if proc:
             failed_procs.append(proc)
     return failed_procs
 
 
 def report_failure(proc):
-    print(f"Captured failure: {shlex.join(proc.args)}")
-    print(proc.stderr.decode("utf-8"))
+    fuzz_proc, spy_proc = proc
+    print(f"Captured failure: {shlex.join(fuzz_proc.args)}")
+    if spy_proc is not None:
+        print(spy_proc.stderr.decode("utf-8"))
+    else:
+        print(fuzz_proc.stderr.decode("utf-8"))
     print()
 
 
-def run_tests(
-    thread_count, num_tests, num_ops, base_seed, fuzzer_exe, spy_script, verbose
-):
+def run_tests(thread_count, num_tests, num_ops, base_seed, fuzzer_exe, spy, verbose):
     if thread_count is None:
         thread_count = os.cpu_count()
 
@@ -142,7 +184,7 @@ def run_tests(
                 num_ops,
                 base_seed,
                 fuzzer_exe,
-                spy_script,
+                spy,
                 verbose,
             ),
             callback=callback,
@@ -198,9 +240,7 @@ def driver():
         dest="fuzzer_exe",
         help="location of fuzzer executable",
     )
-    parser.add_argument(
-        "--spy", dest="spy_script", help="location of Legion Spy script (optional)"
-    )
+    parser.add_argument("--spy", help="location of Legion Spy script (optional)")
     parser.add_argument(
         "-v",
         "--verbose",
