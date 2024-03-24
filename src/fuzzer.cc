@@ -218,6 +218,9 @@ public:
 
   LogicalPartition get_disjoint_partition() const { return lpart; }
 
+  void set_last_redop(ReductionOpID redop) { last_redop = redop; }
+  ReductionOpID get_last_redop() const { return last_redop; }
+
 private:
   Runtime *runtime;
   Context ctx;
@@ -226,12 +229,13 @@ private:
   LogicalRegion root;
   IndexPartition ipart;
   LogicalPartition lpart;
+  ReductionOpID last_redop = LEGION_REDOP_LAST;
 };
 
 class RequirementBuilder {
 public:
   RequirementBuilder(Runtime *_runtime, Context _ctx, const FuzzerConfig &_config,
-                     const RegionForest<1> &_forest)
+                     RegionForest<1> &_forest)
       : runtime(_runtime), ctx(_ctx), config(_config), forest(_forest) {}
 
   void select_fields(const uint64_t seed, uint64_t &seq) {
@@ -267,26 +271,38 @@ public:
     LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
   }
 
-  void select_reduction(const uint64_t seed, uint64_t &seq) {
+  void select_reduction(const uint64_t seed, uint64_t &seq, bool launch_complete) {
     redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
-      switch (uniform_range(seed, seq++, 0, 4)) {
-        case 0: {
-          redop = LEGION_REDOP_SUM_INT64;
-        } break;
-        case 1: {
-          redop = LEGION_REDOP_PROD_INT64;
-        } break;
-        case 2: {
-          redop = LEGION_REDOP_MIN_INT64;
-        } break;
-        case 3: {
-          redop = LEGION_REDOP_MAX_INT64;
-        } break;
-        default:
-          abort();
+      if (forest.get_last_redop() != LEGION_REDOP_LAST) {
+        // When we run two or more reductions back to back, we must use the
+        // same reduction operator again.
+        redop = forest.get_last_redop();
+      } else {
+        switch (uniform_range(seed, seq++, 0, 4)) {
+          case 0: {
+            redop = LEGION_REDOP_SUM_INT64;
+          } break;
+          case 1: {
+            redop = LEGION_REDOP_PROD_INT64;
+          } break;
+          case 2: {
+            redop = LEGION_REDOP_MIN_INT64;
+          } break;
+          case 3: {
+            redop = LEGION_REDOP_MAX_INT64;
+          } break;
+          default:
+            abort();
+        }
+        forest.set_last_redop(redop);
       }
       LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop);
+    } else if (launch_complete) {
+      // Any non-reduction privilege will clear the last reduction, making it
+      // safe to reduce again, assuming the launch actually covers the entire
+      // region.
+      forest.set_last_redop(LEGION_REDOP_LAST);
     }
   }
 
@@ -326,7 +342,7 @@ private:
   Runtime *runtime;
   Context ctx;
   const FuzzerConfig &config;
-  const RegionForest<1> &forest;
+  RegionForest<1> &forest;
   std::vector<FieldID> fields;
   PrivilegeMode privilege = LEGION_NO_ACCESS;
   ReductionOpID redop = LEGION_REDOP_LAST;
@@ -341,7 +357,7 @@ enum class LaunchType {
 class OperationBuilder {
 public:
   OperationBuilder(Runtime *_runtime, Context _ctx, const FuzzerConfig &_config,
-                   const RegionForest<1> &_forest)
+                   RegionForest<1> &_forest)
       : runtime(_runtime),
         ctx(_ctx),
         config(_config),
@@ -444,7 +460,7 @@ public:
   void select_region_requirement(const uint64_t seed, uint64_t &seq) {
     req.select_fields(seed, seq);
     req.select_privilege(seed, seq);
-    req.select_reduction(seed, seq);
+    req.select_reduction(seed, seq, launch_complete);
   }
 
   void select_projection(const uint64_t seed, uint64_t &seq) {
