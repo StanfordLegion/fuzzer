@@ -217,8 +217,9 @@ public:
                const uint64_t seed, uint64_t &stream)
       : runtime(_runtime), ctx(_ctx) {
     ispace = runtime->create_index_space<1>(
-        ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width *
-                                           config.region_tree_size_factor)));
+        ctx,
+        Rect<1>(Point<1>(0),
+                Point<1>(config.region_tree_width * config.region_tree_size_factor - 1)));
 
     fspace = runtime->create_field_space(ctx);
     FieldAllocator falloc = runtime->create_field_allocator(ctx, fspace);
@@ -238,7 +239,7 @@ public:
     root = runtime->create_logical_region(ctx, ispace, fspace);
 
     color_space = runtime->create_index_space<1>(
-        ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width)));
+        ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width - 1)));
 
     // Always make an equal partition first.
     disjoint_partitions.push_back(
@@ -511,7 +512,7 @@ public:
 
     if (launch_complete) {
       range_min = 0;
-      range_max = config.region_tree_width;
+      range_max = config.region_tree_width - 1;
     } else {
       range_min = uniform_range(seed, stream, seq++, 0, config.region_tree_width);
       range_max = uniform_range(seed, stream, seq++, 0, config.region_tree_width);
