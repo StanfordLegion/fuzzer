@@ -380,9 +380,8 @@ static ReductionOpID select_redop(const uint64_t seed, const uint64_t stream,
 
 class RequirementBuilder {
 public:
-  RequirementBuilder(Runtime *_runtime, Context _ctx, const FuzzerConfig &_config,
-                     RegionForest &_forest)
-      : runtime(_runtime), ctx(_ctx), config(_config), forest(_forest) {}
+  RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
+      : config(_config), forest(_forest) {}
 
   void build(const uint64_t seed, const uint64_t stream, uint64_t &seq,
              bool launch_complete, bool requires_projection) {
@@ -440,7 +439,6 @@ private:
         redop = select_redop(seed, stream, seq);
         forest.set_last_redop(redop);
       }
-      LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop);
     } else if (privilege != LEGION_NO_ACCESS && launch_complete) {
       // Any non-reduction (non-no-access) privilege will clear the last
       // reduction, making it safe to reduce again, assuming the launch
@@ -501,7 +499,7 @@ public:
     }
   }
 
-  void add_to_single_task(TaskLauncher &launcher, Point<1> point) {
+  void add_to_single_task(Runtime *runtime, TaskLauncher &launcher, Point<1> point) {
     if (!fields.empty()) {
       LogicalRegion subregion =
           runtime->get_logical_subregion_by_color(partition, point[0]);
@@ -517,7 +515,7 @@ public:
     }
   }
 
-  void display() const {
+  void display(Runtime *runtime, Context ctx) const {
     {
       Realm::LoggerMessage msg = log_fuzz.info();
       msg = msg << "  Fields:";
@@ -527,6 +525,9 @@ public:
       LOG_ONCE(msg);
     }
     LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
+    if (redop != LEGION_REDOP_LAST) {
+      LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop);
+    }
     if (projection == LEGION_MAX_APPLICATION_PROJECTION_ID) {
       LOG_ONCE(log_fuzz.info() << "  Projection: " << projection);
     }
@@ -534,8 +535,6 @@ public:
   }
 
 private:
-  Runtime *runtime;
-  Context ctx;
   const FuzzerConfig &config;
   RegionForest &forest;
   std::vector<FieldID> fields;
@@ -553,13 +552,8 @@ enum class LaunchType {
 
 class OperationBuilder {
 public:
-  OperationBuilder(Runtime *_runtime, Context _ctx, const FuzzerConfig &_config,
-                   RegionForest &_forest)
-      : runtime(_runtime),
-        ctx(_ctx),
-        config(_config),
-        launch_domain(Rect<1>::make_empty()),
-        req(_runtime, _ctx, _config, _forest) {}
+  OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
+      : config(_config), launch_domain(Rect<1>::make_empty()), req(_config, _forest) {}
 
   void build(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
     select_launch_type(seed, stream, seq);
@@ -657,14 +651,14 @@ private:
   }
 
 public:
-  void execute(std::vector<Future> &futures) {
-    display();
+  void execute(Runtime *runtime, Context ctx, std::vector<Future> &futures) {
+    display(runtime, ctx);
     switch (launch_type) {
       case LaunchType::SINGLE_TASK: {
-        execute_single_task(futures);
+        execute_single_task(runtime, ctx, futures);
       } break;
       case LaunchType::INDEX_TASK: {
-        execute_index_task(futures);
+        execute_index_task(runtime, ctx, futures);
       } break;
       default:
         abort();
@@ -672,7 +666,7 @@ public:
   }
 
 private:
-  void execute_index_task(std::vector<Future> &futures) {
+  void execute_index_task(Runtime *runtime, Context ctx, std::vector<Future> &futures) {
     IndexTaskLauncher launcher(task_id, launch_domain, TaskArgument(), ArgumentMap());
     req.add_to_index_task(launcher);
     if (elide_future_return) {
@@ -689,7 +683,7 @@ private:
     }
   }
 
-  void execute_single_task(std::vector<Future> &futures) {
+  void execute_single_task(Runtime *runtime, Context ctx, std::vector<Future> &futures) {
     for (uint64_t point = range_min; point <= range_max; ++point) {
       TaskLauncher launcher(task_id, TaskArgument());
       launcher.point =
@@ -698,7 +692,7 @@ private:
       LOG_ONCE(log_fuzz.info() << "    Shard point: " << launcher.point);
       IndexSpaceT<1> launch_space = runtime->create_index_space<1>(ctx, launch_domain);
       launcher.sharding_space = launch_space;
-      req.add_to_single_task(launcher, point);
+      req.add_to_single_task(runtime, launcher, point);
       if (elide_future_return) {
         launcher.elide_future_return = true;
       }
@@ -714,7 +708,7 @@ private:
     }
   }
 
-  void display() const {
+  void display(Runtime *runtime, Context ctx) const {
     switch (launch_type) {
       case LaunchType::SINGLE_TASK: {
         LOG_ONCE(log_fuzz.info() << "  Launch type: single task");
@@ -733,15 +727,13 @@ private:
       LOG_ONCE(log_fuzz.info() << "    Ordered: " << scalar_reduction_ordered);
     }
     LOG_ONCE(log_fuzz.info() << "  Elide future return: " << elide_future_return);
-    req.display();
+    req.display(runtime, ctx);
     if (launch_type == LaunchType::SINGLE_TASK) {
       LOG_ONCE(log_fuzz.info() << "  Shifting shard points by: " << shard_offset);
     }
   }
 
 private:
-  Runtime *runtime;
-  Context ctx;
   const FuzzerConfig &config;
   LaunchType launch_type = LaunchType::INVALID;
   TaskID task_id = LEGION_MAX_APPLICATION_TASK_ID;
@@ -774,7 +766,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
   std::vector<Future> futures;
   uint64_t seq = 0;
   for (uint64_t op_idx = 0; op_idx < config.num_ops; ++op_idx) {
-    OperationBuilder op(runtime, ctx, config, forest);
+    OperationBuilder op(config, forest);
     op.build(seed, stream, seq);
 
     // It is VERY IMPORTANT that the random number generator is NOT USED
@@ -782,7 +774,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     // while skipping operations.
     if (op_idx >= config.skip_ops) {
       LOG_ONCE(log_fuzz.info() << "Operation: " << op_idx);
-      op.execute(futures);
+      op.execute(runtime, ctx, futures);
     }
   }
 
