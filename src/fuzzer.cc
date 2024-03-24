@@ -316,17 +316,20 @@ public:
   }
 
   void select_privilege(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
-    switch (uniform_range(seed, stream, seq, 0, 3)) {
+    switch (uniform_range(seed, stream, seq, 0, 4)) {
       case 0: {
-        privilege = LEGION_READ_ONLY;
+        privilege = LEGION_NO_ACCESS;
       } break;
       case 1: {
-        privilege = LEGION_READ_WRITE;
+        privilege = LEGION_READ_ONLY;
       } break;
       case 2: {
-        privilege = LEGION_WRITE_DISCARD;
+        privilege = LEGION_READ_WRITE;
       } break;
       case 3: {
+        privilege = LEGION_WRITE_DISCARD;
+      } break;
+      case 4: {
         privilege = LEGION_REDUCE;
       } break;
       default:
