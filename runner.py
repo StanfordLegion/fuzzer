@@ -17,45 +17,70 @@
 
 import argparse, multiprocessing, os, queue, shlex, subprocess
 
-def run_fuzzer(seed, num_ops, fuzzer_exe):
-    cmd = [fuzzer_exe, '-fuzz:seed', str(seed), '-fuzz:ops', str(num_ops), '-level', '4']
+def run_fuzzer(seed, num_ops, fuzzer_exe, skip=None):
+    cmd = [fuzzer_exe, '-fuzz:seed', str(seed), '-fuzz:ops', str(num_ops)]
+    if skip is not None:
+        cmd.extend(['-fuzz:skip', str(skip)])
+    cmd.extend(['-level', '4'])
     proc = subprocess.run(cmd, capture_output=True)
     if proc.returncode == 0:
         return
     return proc
 
-def bisect(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose):
-    if verbose:
+def bisect_start(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose):
+    if verbose >= 2:
+        print(f'[{thread_index} of {thread_count}]: Bisecting {num_ops} ops at seed {seed} to find shortest failure')
+    good = num_ops
+    bad = 0
+    last_failure = None
+    while bad + 1 < good:
+        check = (good + bad)//2
+        if verbose >= 2:
+            print(f'[{thread_index} of {thread_count}]: Testing {num_ops} ops (skipping {check}) at seed {seed}')
+        proc = run_fuzzer(seed, num_ops, fuzzer_exe, skip=check)
+        if proc is None:
+            good = check
+        else:
+            bad = check
+            last_failure = proc
+    return bad, last_failure
+
+def bisect_stop(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose):
+    if verbose >= 2:
         print(f'[{thread_index} of {thread_count}]: Bisecting {num_ops} ops at seed {seed} to find shortest failure')
     good = 0
     bad = num_ops
+    last_failure = None
     while good + 1 < bad:
         check = (good + bad)//2
-        if verbose:
+        if verbose >= 2:
             print(f'[{thread_index} of {thread_count}]: Testing {check} ops at seed {seed}')
         proc = run_fuzzer(seed, check, fuzzer_exe)
         if proc is None:
             good = check
         else:
             bad = check
-    return bad, proc
+            last_failure = proc
+    return bad, last_failure
 
 def fuzz(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose):
-    if verbose:
+    if verbose >= 2:
         print(f'[{thread_index} of {thread_count}]: Testing {num_ops} ops at seed {seed}')
     proc = run_fuzzer(seed, num_ops, fuzzer_exe)
     if proc is None:
         return
-    print(f'[{thread_index} of {thread_count}]: Found failure: {shlex.join(proc.args)}')
-    bad, bad_proc = bisect(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose)
-    if bad_proc:
-        print(f'[{thread_index} of {thread_count}]: Shortest failure for this seed: {shlex.join(bad_proc.args)}')
-    else:
-        print(f'[{thread_index} of {thread_count}]: No way to shorten failure for this seed')
-    return bad_proc or proc
+    if verbose >= 1:
+        print(f'[{thread_index} of {thread_count}]: Found failure: {shlex.join(proc.args)}')
+    stop, stop_proc = bisect_stop(thread_index, thread_count, seed, num_ops, fuzzer_exe, verbose)
+    start, start_proc = bisect_start(thread_index, thread_count, seed, stop, fuzzer_exe, verbose)
+    proc = start_proc or stop_proc or proc
+    if verbose >= 1:
+        print(f'[{thread_index} of {thread_count}]: Shortest failure for this seed: {shlex.join(proc.args)}')
+    return proc
 
 def run_test(thread_index, thread_count, num_tests, num_ops, base_seed, fuzzer_exe, spy_script, verbose):
-    print(f'[{thread_index} of {thread_count}]: Starting search')
+    if verbose >= 1:
+        print(f'[{thread_index} of {thread_count}]: Starting search')
     initial_seed = base_seed + thread_index
     failed_procs = []
     for test_index in range(num_tests):
@@ -135,7 +160,8 @@ def driver():
                         dest='spy_script',
                         help='location of Legion Spy script (optional)')
     parser.add_argument('-v', '--verbose',
-                        action='store_true',
+                        action='count',
+                        default=0,
                         dest='verbose',
                         help='enable verbose output')
     args = parser.parse_args()
