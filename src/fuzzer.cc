@@ -36,6 +36,13 @@ enum TaskIDs {
   TOP_LEVEL_TASK_ID,
 };
 
+enum ProjectionIDs {
+  PROJECTION_OFFSET_1_ID = 1,
+  PROJECTION_OFFSET_2_ID = 2,
+  PROJECTION_LAST_DISJOINT_ID = PROJECTION_OFFSET_2_ID,
+  PROJECTION_RANDOM_DEPTH_1_ID = 3,
+};
+
 #define LOG_ONCE(x) runtime->log_once(ctx, (x))
 
 static Logger log_fuzz("fuzz");
@@ -108,6 +115,27 @@ struct FuzzerConfig {
                               << region_tree_num_fields);
     LOG_ONCE(log_fuzz.print() << "  config.num_ops = " << num_ops);
   }
+};
+
+class OffsetProjection : public ProjectionFunctor {
+public:
+  OffsetProjection(uint64_t _offset) : offset(_offset) {}
+  bool is_functional(void) const override { return true; }
+  bool is_invertible(void) const override { return false; }
+  unsigned get_depth(void) const override { return 0; }
+  LogicalRegion project(LogicalPartition upper_bound, const DomainPoint &point,
+                        const Domain &launch_domain) override {
+    Domain color_space =
+        runtime->get_index_partition_color_space(upper_bound.get_index_partition());
+    Rect<1> rect = color_space;
+    uint64_t index = Point<1>(point)[0];
+    index = (index - rect.lo[0] + offset) % (rect.hi[0] - rect.lo[0] + 1) + rect.lo[0];
+
+    return runtime->get_logical_subregion_by_color(upper_bound, index);
+  }
+
+protected:
+  uint64_t offset;
 };
 
 void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
@@ -424,7 +452,19 @@ private:
                          bool requires_projection) {
     projection = LEGION_MAX_APPLICATION_PROJECTION_ID;
     if (requires_projection) {
-      projection = 0;  // identity projection functor
+      switch (uniform_range(seed, stream, seq, 0, 2)) {
+        case 0: {
+          projection = 0;  // identity projection functor
+        } break;
+        case 1: {
+          projection = PROJECTION_OFFSET_1_ID;
+        } break;
+        case 2: {
+          projection = PROJECTION_OFFSET_2_ID;
+        } break;
+        default:
+          abort();
+      }
       LOG_ONCE(log_fuzz.info() << "  Projection: " << projection);
     }
   }
@@ -709,6 +749,11 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 }
 
 int main(int argc, char **argv) {
+  Runtime::preregister_projection_functor(PROJECTION_OFFSET_1_ID,
+                                          new OffsetProjection(1));
+  Runtime::preregister_projection_functor(PROJECTION_OFFSET_2_ID,
+                                          new OffsetProjection(2));
+
   Runtime::set_top_level_task_id(TOP_LEVEL_TASK_ID);
   {
     TaskVariantRegistrar registrar(TOP_LEVEL_TASK_ID, "top_level");
