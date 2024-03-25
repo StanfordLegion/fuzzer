@@ -52,19 +52,20 @@ def run_fuzzer(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose, skip=None):
         cmd.extend(["-level", "4"])
     if verbose >= 3:
         print(f"[{tid} of {tnum}]: Running {shlex.join(cmd)}")
-    proc = subprocess.run(cmd, capture_output=True)
-    if proc.returncode == 0:
-        spy_proc = None
+    try:
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode == 0:
+            spy_proc = None
+            if spy:
+                spy_logs = glob.glob(os.path.join(log_dir, "spy_*.log"))
+                spy_proc = run_spy(tid, tnum, spy, spy_logs, verbose)
+            if spy_proc is None:
+                return
+            return (proc, spy_proc)
+        return (proc, None)
+    finally:
         if spy:
-            spy_logs = glob.glob(os.path.join(log_dir, "spy_*.log"))
-            spy_proc = run_spy(tid, tnum, spy, spy_logs, verbose)
             shutil.rmtree(log_dir)
-        if spy_proc is None:
-            return
-        return (proc, spy_proc)
-    if spy:
-        shutil.rmtree(log_dir)
-    return (proc, None)
 
 
 def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
