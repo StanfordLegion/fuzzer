@@ -322,8 +322,28 @@ public:
     }
   }
 
-  void set_last_redop(ReductionOpID redop) { last_redop = redop; }
-  ReductionOpID get_last_redop() const { return last_redop; }
+  void set_last_redop(const std::vector<FieldID> &fields, ReductionOpID redop) {
+    for (FieldID field : fields) {
+      last_field_redop[field] = redop;
+    }
+  }
+
+  bool get_last_redop(const std::vector<FieldID> &fields,
+                      ReductionOpID &last_redop) const {
+    last_redop = LEGION_REDOP_LAST;
+    for (FieldID field : fields) {
+      auto it = last_field_redop.find(field);
+      if (it != last_field_redop.end()) {
+        if (last_redop == LEGION_REDOP_LAST || last_redop == it->second) {
+          last_redop = it->second;
+        } else {
+          last_redop = LEGION_REDOP_LAST;
+          return false;
+        }
+      }
+    }
+    return true;
+  }
 
 private:
   void color_points(const std::vector<FieldID> &colors, const FuzzerConfig &config,
@@ -349,7 +369,7 @@ private:
   IndexSpaceT<1> color_space;
   std::vector<IndexPartition> disjoint_partitions;
   std::vector<IndexPartition> aliased_partitions;
-  ReductionOpID last_redop = LEGION_REDOP_LAST;
+  std::map<FieldID, ReductionOpID> last_field_redop;
 };
 
 static ReductionOpID select_redop(const uint64_t seed, const uint64_t stream,
@@ -431,19 +451,30 @@ private:
                         bool launch_complete) {
     redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
-      if (forest.get_last_redop() != LEGION_REDOP_LAST) {
+      ReductionOpID last_redop;
+      bool ok = forest.get_last_redop(fields, last_redop);
+      if (ok && last_redop != LEGION_REDOP_LAST) {
         // When we run two or more reductions back to back, we must use the
         // same reduction operator again.
-        redop = forest.get_last_redop();
+        redop = last_redop;
+      } else if (!ok) {
+        // Two or more fields had conflicting redops, so there's no way to
+        // pick a single one across the entire set. Fall back to read-write.
+        privilege = LEGION_READ_WRITE;
       } else {
+        // No previous reduction, we're ok to go ahead and pick.
         redop = select_redop(seed, stream, seq);
-        forest.set_last_redop(redop);
       }
+    }
+
+    // We have to be conservative here: always set the redop (if we're doing a
+    // reduction) but clear it only if the launch is complete.
+    if (redop != LEGION_REDOP_LAST) {
+      // Note: even if we got the redop through the cache, we still have to
+      // make sure all fields are covered.
+      forest.set_last_redop(fields, redop);
     } else if (privilege != LEGION_NO_ACCESS && launch_complete) {
-      // Any non-reduction (non-no-access) privilege will clear the last
-      // reduction, making it safe to reduce again, assuming the launch
-      // actually covers the entire region.
-      forest.set_last_redop(LEGION_REDOP_LAST);
+      forest.set_last_redop(fields, LEGION_REDOP_LAST);
     }
   }
 
