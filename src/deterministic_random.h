@@ -32,12 +32,36 @@
 #define DETERMINISTIC_RANDOM_H_
 
 #include <cstdint>
+#include <type_traits>
 
-uint64_t uniform_uint64_t(const uint64_t seed, const uint64_t stream,
-                          uint64_t &sequence_number);
+class RngSeed;
 
-uint64_t uniform_range(const uint64_t seed, const uint64_t stream,
-                       uint64_t &sequence_number, uint64_t range_lo,
-                       uint64_t range_hi /* inclusive */);
+class RngStream {
+private:
+  RngStream(uint64_t seed, uint64_t stream);
+
+public:
+  uint64_t uniform_uint64_t();
+  uint64_t uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */);
+
+private:
+  const uint64_t seed;
+  const uint64_t stream;
+  uint64_t seq;
+
+  friend class RngSeed;
+};
+static_assert(std::is_trivially_copyable_v<RngStream>);
+
+class RngSeed {
+public:
+  RngSeed(uint64_t seed);
+  RngStream make_stream();
+
+private:
+  const uint64_t seed;
+  uint64_t stream;
+};
+static_assert(std::is_trivially_copyable_v<RngSeed>);
 
 #endif  // DETERMINISTIC_RANDOM_H_

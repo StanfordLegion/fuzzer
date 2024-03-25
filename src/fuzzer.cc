@@ -183,8 +183,10 @@ int64_t int64_replicable_inner(const Task *task,
 }
 
 struct ColorPointsArgs {
-  uint64_t seed;
-  uint64_t stream;
+  ColorPointsArgs(RngStream _stream, uint64_t _width)
+      : stream(_stream), region_tree_width(_width) {}
+
+  RngStream stream;
   uint64_t region_tree_width;
 };
 
@@ -192,10 +194,8 @@ void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regi
                        Context ctx, Runtime *runtime) {
   assert(task->arglen == sizeof(ColorPointsArgs));
   const ColorPointsArgs args = *reinterpret_cast<ColorPointsArgs *>(task->args);
-  const uint64_t seed = args.seed;
-  const uint64_t stream = args.stream;
+  RngStream rng = args.stream;
   const uint64_t region_tree_width = args.region_tree_width;
-  uint64_t seq = 0;
 
   PhysicalRegion pr = regions[0];
   std::vector<FieldID> fields;
@@ -207,7 +207,7 @@ void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regi
   for (FieldID field : fields) {
     const FieldAccessor<READ_WRITE, Point<1>, 1> acc(pr, field);
     for (PointInDomainIterator<1> pir(domain); pir(); pir++) {
-      uint64_t color = uniform_range(seed, stream, seq, 0, region_tree_width - 1);
+      uint64_t color = rng.uniform_range(0, region_tree_width - 1);
       acc[*pir] = color;
     }
   }
@@ -215,8 +215,7 @@ void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regi
 
 class RegionForest {
 public:
-  RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config,
-               const uint64_t seed, uint64_t &stream)
+  RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config, RngSeed &seed)
       : runtime(_runtime), ctx(_ctx) {
     ispace = runtime->create_index_space<1>(
         ctx,
@@ -256,7 +255,7 @@ public:
           colors.push_back(fid++);
         }
 
-        color_points(colors, config, seed, stream);
+        color_points(colors, config, seed);
 
         std::vector<IndexPartition> color_parts;
         for (FieldID color : colors) {
@@ -300,19 +299,17 @@ public:
 
   LogicalRegion get_root() const { return root; }
 
-  LogicalPartition select_disjoint_partition(const uint64_t seed, const uint64_t stream,
-                                             uint64_t &seq) {
+  LogicalPartition select_disjoint_partition(RngStream &rng) {
     uint64_t num_disjoint = disjoint_partitions.size();
-    uint64_t part_idx = uniform_range(seed, stream, seq, 0, num_disjoint - 1);
+    uint64_t part_idx = rng.uniform_range(0, num_disjoint - 1);
     return runtime->get_logical_partition(root, disjoint_partitions[part_idx]);
   }
 
-  LogicalPartition select_any_partition(const uint64_t seed, const uint64_t stream,
-                                        uint64_t &seq) {
+  LogicalPartition select_any_partition(RngStream &rng) {
     uint64_t num_disjoint = disjoint_partitions.size();
     uint64_t num_aliased = aliased_partitions.size();
     uint64_t num_total = num_disjoint + num_aliased;
-    uint64_t part_idx = uniform_range(seed, stream, seq, 0, num_total - 1);
+    uint64_t part_idx = rng.uniform_range(0, num_total - 1);
     if (part_idx < num_disjoint) {
       return runtime->get_logical_partition(root, disjoint_partitions[part_idx]);
     } else {
@@ -347,11 +344,8 @@ public:
 
 private:
   void color_points(const std::vector<FieldID> &colors, const FuzzerConfig &config,
-                    const uint64_t seed, uint64_t &stream) {
-    ColorPointsArgs args;
-    args.seed = seed;
-    args.stream = stream;
-    args.region_tree_width = config.region_tree_width;
+                    RngSeed &seed) {
+    ColorPointsArgs args(seed.make_stream(), config.region_tree_width);
     TaskLauncher launcher(COLOR_POINTS_TASK_ID, TaskArgument(&args, sizeof(args)));
     launcher.add_region_requirement(
         RegionRequirement(root, std::set<FieldID>(colors.begin(), colors.end()), colors,
@@ -372,9 +366,8 @@ private:
   std::map<FieldID, ReductionOpID> last_field_redop;
 };
 
-static ReductionOpID select_redop(const uint64_t seed, const uint64_t stream,
-                                  uint64_t &seq) {
-  switch (uniform_range(seed, stream, seq, 0, 8)) {
+static ReductionOpID select_redop(RngStream &rng) {
+  switch (rng.uniform_range(0, 8)) {
     case 0:
       return LEGION_REDOP_SUM_INT64;
     case 1:
@@ -403,21 +396,19 @@ public:
   RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config), forest(_forest) {}
 
-  void build(const uint64_t seed, const uint64_t stream, uint64_t &seq,
-             bool launch_complete, bool requires_projection) {
-    select_fields(seed, stream, seq);
-    select_privilege(seed, stream, seq);
-    select_reduction(seed, stream, seq, launch_complete);
-    select_projection(seed, stream, seq, requires_projection);
-    select_partition(seed, stream, seq, requires_projection);
+  void build(RngStream &rng, bool launch_complete, bool requires_projection) {
+    select_fields(rng);
+    select_privilege(rng);
+    select_reduction(rng, launch_complete);
+    select_projection(rng, requires_projection);
+    select_partition(rng, requires_projection);
   }
 
 private:
-  void select_fields(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
+  void select_fields(RngStream &rng) {
     fields.clear();
 
-    uint64_t field_set =
-        uniform_range(seed, stream, seq, 0, (1 << config.region_tree_num_fields) - 1);
+    uint64_t field_set = rng.uniform_range(0, (1 << config.region_tree_num_fields) - 1);
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
       if ((field_set & (1 << field)) != 0) {
         fields.push_back(field);
@@ -425,8 +416,8 @@ private:
     }
   }
 
-  void select_privilege(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
-    switch (uniform_range(seed, stream, seq, 0, 4)) {
+  void select_privilege(RngStream &rng) {
+    switch (rng.uniform_range(0, 4)) {
       case 0: {
         privilege = LEGION_NO_ACCESS;
       } break;
@@ -447,8 +438,7 @@ private:
     }
   }
 
-  void select_reduction(const uint64_t seed, const uint64_t stream, uint64_t &seq,
-                        bool launch_complete) {
+  void select_reduction(RngStream &rng, bool launch_complete) {
     redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
       ReductionOpID last_redop;
@@ -463,7 +453,7 @@ private:
         privilege = LEGION_READ_WRITE;
       } else {
         // No previous reduction, we're ok to go ahead and pick.
-        redop = select_redop(seed, stream, seq);
+        redop = select_redop(rng);
       }
     }
 
@@ -485,11 +475,10 @@ private:
     return (privilege & LEGION_WRITE_PRIV) != 0;
   }
 
-  void select_projection(const uint64_t seed, const uint64_t stream, uint64_t &seq,
-                         bool requires_projection) {
+  void select_projection(RngStream &rng, bool requires_projection) {
     projection = LEGION_MAX_APPLICATION_PROJECTION_ID;
     if (requires_projection) {
-      switch (uniform_range(seed, stream, seq, 0, 2)) {
+      switch (rng.uniform_range(0, 2)) {
         case 0: {
           projection = 0;  // identity projection functor
         } break;
@@ -505,12 +494,11 @@ private:
     }
   }
 
-  void select_partition(const uint64_t seed, const uint64_t stream, uint64_t &seq,
-                        bool requires_projection) {
+  void select_partition(RngStream &rng, bool requires_projection) {
     if (requires_projection && need_disjoint()) {
-      partition = forest.select_disjoint_partition(seed, stream, seq);
+      partition = forest.select_disjoint_partition(rng);
     } else {
-      partition = forest.select_any_partition(seed, stream, seq);
+      partition = forest.select_any_partition(rng);
     }
   }
 
@@ -586,19 +574,19 @@ public:
   OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config), launch_domain(Rect<1>::make_empty()), req(_config, _forest) {}
 
-  void build(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
-    select_launch_type(seed, stream, seq);
-    select_task_id(seed, stream, seq);
-    select_launch_domain(seed, stream, seq);
-    select_scalar_reduction(seed, stream, seq);
-    select_elide_future_return(seed, stream, seq);
-    select_region_requirement(seed, stream, seq);
-    select_shard_offset(seed, stream, seq);
+  void build(RngStream &rng) {
+    select_launch_type(rng);
+    select_task_id(rng);
+    select_launch_domain(rng);
+    select_scalar_reduction(rng);
+    select_elide_future_return(rng);
+    select_region_requirement(rng);
+    select_shard_offset(rng);
   }
 
 private:
-  void select_launch_type(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
-    switch (uniform_range(seed, stream, seq, 0, 1)) {
+  void select_launch_type(RngStream &rng) {
+    switch (rng.uniform_range(0, 1)) {
       case 0: {
         launch_type = LaunchType::SINGLE_TASK;
       } break;
@@ -610,8 +598,8 @@ private:
     }
   }
 
-  void select_task_id(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
-    switch (uniform_range(seed, stream, seq, 0, 3)) {
+  void select_task_id(RngStream &rng) {
+    switch (rng.uniform_range(0, 3)) {
       case 0: {
         task_id = VOID_LEAF_TASK_ID;
         task_produces_value = false;
@@ -633,18 +621,18 @@ private:
     }
   }
 
-  void select_launch_domain(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
+  void select_launch_domain(RngStream &rng) {
     // A lot of Legion algorithms hinge on whether a launch is
     // complete or not, so we'll make that a special case here.
 
-    launch_complete = uniform_range(seed, stream, seq, 0, 1) == 0;
+    launch_complete = rng.uniform_range(0, 1) == 0;
 
     if (launch_complete) {
       range_min = 0;
       range_max = config.region_tree_width - 1;
     } else {
-      range_min = uniform_range(seed, stream, seq, 0, config.region_tree_width - 1);
-      range_max = uniform_range(seed, stream, seq, 0, config.region_tree_width - 1);
+      range_min = rng.uniform_range(0, config.region_tree_width - 1);
+      range_max = rng.uniform_range(0, config.region_tree_width - 1);
       // Make sure the range is always non-empty.
       if (range_max < range_min) {
         std::swap(range_min, range_max);
@@ -655,29 +643,26 @@ private:
     launch_domain = Rect<1>(Point<1>(range_min), Point<1>(range_max));
   }
 
-  void select_scalar_reduction(const uint64_t seed, const uint64_t stream,
-                               uint64_t &seq) {
+  void select_scalar_reduction(RngStream &rng) {
     scalar_redop = LEGION_REDOP_LAST;
     if (launch_type == LaunchType::INDEX_TASK && task_produces_value) {
-      scalar_redop = select_redop(seed, stream, seq);
-      scalar_reduction_ordered = uniform_range(seed, stream, seq, 0, 1) == 0;
+      scalar_redop = select_redop(rng);
+      scalar_reduction_ordered = rng.uniform_range(0, 1) == 0;
     }
   }
 
-  void select_elide_future_return(const uint64_t seed, const uint64_t stream,
-                                  uint64_t &seq) {
-    elide_future_return = uniform_range(seed, stream, seq, 0, 1) == 0;
+  void select_elide_future_return(RngStream &rng) {
+    elide_future_return = rng.uniform_range(0, 1) == 0;
   }
 
-  void select_region_requirement(const uint64_t seed, const uint64_t stream,
-                                 uint64_t &seq) {
-    req.build(seed, stream, seq, launch_complete, launch_type == LaunchType::INDEX_TASK);
+  void select_region_requirement(RngStream &rng) {
+    req.build(rng, launch_complete, launch_type == LaunchType::INDEX_TASK);
   }
 
-  void select_shard_offset(const uint64_t seed, const uint64_t stream, uint64_t &seq) {
+  void select_shard_offset(RngStream &rng) {
     shard_offset = 0;
     if (launch_type == LaunchType::SINGLE_TASK) {
-      shard_offset = uniform_range(seed, stream, seq, 0, config.region_tree_width - 1);
+      shard_offset = rng.uniform_range(0, config.region_tree_width - 1);
     }
   }
 
@@ -787,18 +772,15 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
   FuzzerConfig config = FuzzerConfig::parse_args(args.argc, args.argv);
   config.log_config(runtime, ctx);
 
-  const uint64_t seed = config.initial_seed;
+  RngSeed seed(config.initial_seed);
+  RngStream rng = seed.make_stream();
 
-  uint64_t next_stream = 0;
-  const uint64_t stream = next_stream++;
-
-  RegionForest forest(runtime, ctx, config, seed, next_stream);
+  RegionForest forest(runtime, ctx, config, seed);
 
   std::vector<Future> futures;
-  uint64_t seq = 0;
   for (uint64_t op_idx = 0; op_idx < config.num_ops; ++op_idx) {
     OperationBuilder op(config, forest);
-    op.build(seed, stream, seq);
+    op.build(rng);
 
     // It is VERY IMPORTANT that the random number generator is NOT USED
     // inside this if statement. Otherwise, we lose the ability to replay

@@ -21,6 +21,16 @@
 
 #include "siphash.h"
 
+RngSeed::RngSeed(uint64_t _seed) : seed(_seed), stream(0) {}
+
+RngStream RngSeed::make_stream() {
+  RngStream result(seed, stream++);
+  return result;
+}
+
+RngStream::RngStream(uint64_t _seed, uint64_t _stream)
+    : seed(_seed), stream(_stream), seq(0) {}
+
 static void gen_bits(const uint8_t *input, size_t input_bytes, uint8_t *output,
                      size_t output_bytes) {
   // To generate deterministic uniformly distributed bits, run a hash
@@ -29,18 +39,15 @@ static void gen_bits(const uint8_t *input, size_t input_bytes, uint8_t *output,
   siphash(input, input_bytes, k, output, output_bytes);
 }
 
-uint64_t uniform_uint64_t(const uint64_t seed, const uint64_t stream,
-                          uint64_t &sequence_number) {
-  const uint64_t input[3] = {seed, stream, sequence_number++};
+uint64_t RngStream::uniform_uint64_t() {
+  const uint64_t input[3] = {seed, stream, seq++};
   uint64_t result;
   gen_bits(reinterpret_cast<const uint8_t *>(&input), sizeof(input),
            reinterpret_cast<uint8_t *>(&result), sizeof(result));
   return result;
 }
 
-uint64_t uniform_range(const uint64_t seed, const uint64_t stream,
-                       uint64_t &sequence_number, uint64_t range_lo,
-                       uint64_t range_hi /* inclusive */) {
+uint64_t RngStream::uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */) {
   if (range_hi <= range_lo) {
     return range_lo;
   }
@@ -53,7 +60,7 @@ uint64_t uniform_range(const uint64_t seed, const uint64_t stream,
   // loop (for small ranges), so the expected trip count is 1.
   uint64_t bits;
   do {
-    bits = uniform_uint64_t(seed, stream, sequence_number);
+    bits = uniform_uint64_t();
   } while (bits >= UINT64_MAX - remainder);
   return range_lo + (bits % range_size);
 }
