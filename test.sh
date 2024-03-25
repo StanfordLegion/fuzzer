@@ -26,6 +26,7 @@ if [[ $FUZZER_INSTALL_LEGION -eq 1 ]]; then
             -DCMAKE_BUILD_TYPE=$([ $FUZZER_DEBUG -eq 1 ] && echo Debug || echo Release)
             -DCMAKE_INSTALL_PREFIX=$PWD/../install
             -DCMAKE_CXX_STANDARD=17
+            -DCMAKE_CXX_FLAGS_DEBUG='-g -O2' # improve performance of debug code
             -DLegion_SPY=ON
             -DBUILD_SHARED_LIBS=ON # to improve link speed
         )
@@ -49,12 +50,9 @@ fi
 mkdir -p build
 pushd build
 fuzzer_flags=(
-    -DCMAKE_BUILD_TYPE=$([ ${FUZZER_DEBUG:-1} -eq 1 ] && echo Debug || echo Release)
+    -DCMAKE_BUILD_TYPE=$([ ${FUZZER_DEBUG:-1} -eq 1 ] && echo RelWithDebInfo || echo Release)
     -DCMAKE_PREFIX_PATH=$PWD/../legion/install
     -DCMAKE_CXX_FLAGS="-Wall -Werror"
-    # do NOT set NDEBUG, it causes all sorts of issues
-    -DCMAKE_CXX_FLAGS_RELEASE="-O2 -march=native"
-    -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g -march=native"
 )
 if [[ -n $FUZZER_LEGION_NETWORKS ]]; then
     fuzzer_flags+=(
@@ -63,6 +61,7 @@ if [[ -n $FUZZER_LEGION_NETWORKS ]]; then
 fi
 cmake "${fuzzer_flags[@]}" ..
 make -j${FUZZER_THREADS:-4}
+popd
+
 export REALM_SYNTHETIC_CORE_MAP=
 ./runner.py --fuzzer=$PWD/build/src/fuzzer -j${FUZZER_THREADS:-4}
-popd

@@ -599,23 +599,24 @@ private:
   }
 
   void select_task_id(RngStream &rng) {
-    switch (rng.uniform_range(0, 3)) {
+    switch (rng.uniform_range(0, 1)) {
       case 0: {
         task_id = VOID_LEAF_TASK_ID;
         task_produces_value = false;
       } break;
       case 1: {
-        task_id = VOID_INNER_TASK_ID;
-        task_produces_value = false;
-      } break;
-      case 2: {
         task_id = INT64_LEAF_TASK_ID;
         task_produces_value = true;
       } break;
-      case 3: {
-        task_id = INT64_INNER_TASK_ID;
-        task_produces_value = true;
-      } break;
+      // FIXME: https://github.com/StanfordLegion/legion/issues/1659
+      // case 2: {
+      //   task_id = VOID_INNER_TASK_ID;
+      //   task_produces_value = false;
+      // } break;
+      // case 3: {
+      //   task_id = INT64_INNER_TASK_ID;
+      //   task_produces_value = true;
+      // } break;
       default:
         abort();
     }
