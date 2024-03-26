@@ -148,38 +148,146 @@ protected:
   uint64_t offset;
 };
 
+template <typename T>
+const T unpack_args(const Task *task) {
+  assert(task->arglen == sizeof(T));
+  const T result = *reinterpret_cast<T *>(task->args);
+  return result;
+}
+
+struct PointTaskArgs {
+  PointTaskArgs(int64_t _value) : value(_value) {}
+  int64_t value;
+};
+
+static void write_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
+                        int64_t value) {
+  const FieldAccessor<LEGION_READ_WRITE, int64_t, 1, coord_t,
+                      Realm::AffineAccessor<int64_t, 1, coord_t>>
+      acc(region, fid);
+  for (Domain::DomainPointIterator it(dom); it; ++it) {
+    acc[*it] = value;
+  }
+}
+
+template <typename REDOP>
+static void reduce_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
+                         ReductionOpID redop, int64_t value) {
+  const ReductionAccessor<REDOP, true /* exclusive */, 1, coord_t,
+                          Realm::AffineAccessor<int64_t, 1, coord_t>>
+      acc(region, fid, redop);
+  for (Domain::DomainPointIterator it(dom); it; ++it) {
+    acc[*it] <<= value;
+  }
+}
+
+static void task_body(const Task *task, const std::vector<PhysicalRegion> &regions,
+                      Context ctx, Runtime *runtime) {
+  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
+
+  for (size_t idx = 0; idx < task->regions.size(); ++idx) {
+    const RegionRequirement &req = task->regions[idx];
+    Domain dom = runtime->get_index_space_domain(
+        regions[idx].get_logical_region().get_index_space());
+    if ((req.privilege & LEGION_WRITE_PRIV) != 0) {
+      for (FieldID fid : req.instance_fields) {
+        write_field(regions[idx], dom, fid, args.value);
+      }
+    } else if ((req.privilege & LEGION_REDUCE_PRIV) != 0) {
+      for (FieldID fid : req.instance_fields) {
+        switch (req.redop) {
+          case LEGION_REDOP_SUM_INT64: {
+            reduce_field<SumReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                                args.value);
+          } break;
+          case LEGION_REDOP_DIFF_INT64: {
+            reduce_field<DiffReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                                 args.value);
+          } break;
+          case LEGION_REDOP_PROD_INT64: {
+            reduce_field<ProdReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                                 args.value);
+          } break;
+          case LEGION_REDOP_DIV_INT64: {
+            reduce_field<DivReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                                args.value);
+          } break;
+          case LEGION_REDOP_MIN_INT64: {
+            reduce_field<MinReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                                args.value);
+          } break;
+          case LEGION_REDOP_MAX_INT64: {
+            reduce_field<MaxReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                                args.value);
+          } break;
+          case LEGION_REDOP_AND_INT64: {
+            reduce_field<AndReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                                args.value);
+          } break;
+          case LEGION_REDOP_OR_INT64: {
+            reduce_field<OrReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                               args.value);
+          } break;
+          case LEGION_REDOP_XOR_INT64: {
+            reduce_field<XorReduction<int64_t>>(regions[idx], dom, fid, req.redop,
+                                                args.value);
+          } break;
+          default:
+            abort();
+        }
+      }
+    }
+  }
+}
+
 void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-               Runtime *runtime) {}
+               Runtime *runtime) {
+  task_body(task, regions, ctx, runtime);
+}
 
 int64_t int64_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
                    Context ctx, Runtime *runtime) {
-  return 1;
+  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
+  task_body(task, regions, ctx, runtime);
+  return args.value >> 16;
 }
 
 void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-                Runtime *runtime) {}
+                Runtime *runtime) {
+  task_body(task, regions, ctx, runtime);
+}
 
 int64_t int64_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
                     Context ctx, Runtime *runtime) {
-  return 2;
+  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
+  task_body(task, regions, ctx, runtime);
+  return args.value >> 16;
 }
 
 void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
-                          Context ctx, Runtime *runtime) {}
+                          Context ctx, Runtime *runtime) {
+  task_body(task, regions, ctx, runtime);
+}
 
 int64_t int64_replicable_leaf(const Task *task,
                               const std::vector<PhysicalRegion> &regions, Context ctx,
                               Runtime *runtime) {
-  return 3;
+  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
+  task_body(task, regions, ctx, runtime);
+  return args.value >> 16;
 }
 
 void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
-                           Context ctx, Runtime *runtime) {}
+                           Context ctx, Runtime *runtime) {
+  task_body(task, regions, ctx, runtime);
+}
 
 int64_t int64_replicable_inner(const Task *task,
                                const std::vector<PhysicalRegion> &regions, Context ctx,
                                Runtime *runtime) {
-  return 4;
+  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
+  task_body(task, regions, ctx, runtime);
+  return args.value >> 16;
 }
 
 struct ColorPointsArgs {
@@ -192,8 +300,7 @@ struct ColorPointsArgs {
 
 void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regions,
                        Context ctx, Runtime *runtime) {
-  assert(task->arglen == sizeof(ColorPointsArgs));
-  const ColorPointsArgs args = *reinterpret_cast<ColorPointsArgs *>(task->args);
+  const ColorPointsArgs args = unpack_args<ColorPointsArgs>(task);
   RngStream rng = args.stream;
   const uint64_t region_tree_width = args.region_tree_width;
 
@@ -229,7 +336,7 @@ public:
     {
       FieldID fid = 0;
       for (uint64_t field = 0; field < num_fields; ++field) {
-        falloc.allocate_field(sizeof(uint64_t), fid++);
+        falloc.allocate_field(sizeof(int64_t), fid++);
       }
       for (uint64_t num_colors = 1; num_colors < branch_factor; ++num_colors) {
         for (uint64_t color = 0; color < num_colors; ++color) {
@@ -286,7 +393,7 @@ public:
 
     // Initialize everything so we don't get unitialized read warnings
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
-      runtime->fill_field<uint64_t>(ctx, root, root, field, field);
+      runtime->fill_field<int64_t>(ctx, root, root, field, field);
     }
   }
 
@@ -582,6 +689,7 @@ public:
     select_elide_future_return(rng);
     select_region_requirement(rng);
     select_shard_offset(rng);
+    select_task_arg(rng);
   }
 
 private:
@@ -667,6 +775,12 @@ private:
     }
   }
 
+  void select_task_arg(RngStream &rng) {
+    // Choose something small enough to avoid overflow if we combine a lot of
+    // values.
+    task_arg_value = rng.uniform_range(0, 0xFFFFFFFFULL);
+  }
+
 public:
   void execute(Runtime *runtime, Context ctx, std::vector<Future> &futures) {
     display(runtime, ctx);
@@ -684,7 +798,8 @@ public:
 
 private:
   void execute_index_task(Runtime *runtime, Context ctx, std::vector<Future> &futures) {
-    IndexTaskLauncher launcher(task_id, launch_domain, TaskArgument(), ArgumentMap());
+    TaskArgument arg(&task_arg_value, sizeof(task_arg_value));
+    IndexTaskLauncher launcher(task_id, launch_domain, arg, ArgumentMap());
     req.add_to_index_task(launcher);
     if (elide_future_return) {
       launcher.elide_future_return = true;
@@ -702,7 +817,8 @@ private:
 
   void execute_single_task(Runtime *runtime, Context ctx, std::vector<Future> &futures) {
     for (uint64_t point = range_min; point <= range_max; ++point) {
-      TaskLauncher launcher(task_id, TaskArgument());
+      TaskArgument arg(&task_arg_value, sizeof(task_arg_value));
+      TaskLauncher launcher(task_id, arg);
       launcher.point =
           Point<1>((point - range_min + shard_offset) % range_size + range_min);
       LOG_ONCE(log_fuzz.info() << "  Task: " << point);
@@ -765,6 +881,7 @@ private:
   bool elide_future_return = false;
   RequirementBuilder req;
   uint64_t shard_offset = 0;
+  int64_t task_arg_value = 0;
 };
 
 void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
@@ -794,7 +911,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 
   for (Future &future : futures) {
     int64_t result = future.get_result<int64_t>();
-    LOG_ONCE(log_fuzz.info() << "Future result: " << result);
+    LOG_ONCE(log_fuzz.debug() << "Future result: " << result);
   }
 }
 
