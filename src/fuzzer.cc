@@ -240,6 +240,16 @@ static void task_body(const Task *task, const std::vector<PhysicalRegion> &regio
   }
 }
 
+uint64_t compute_task_result(const Task *task) {
+  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
+  // Twiddle the bits a bit to make some interesting bit patterns
+  uint64_t point = 0;
+  if (task->is_index_space) {
+    point = task->index_point[0];
+  }
+  return point ^ args.value;
+}
+
 void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
                Runtime *runtime) {
   task_body(task, regions, ctx, runtime);
@@ -247,9 +257,8 @@ void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 
 uint64_t uint64_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
                      Context ctx, Runtime *runtime) {
-  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
   task_body(task, regions, ctx, runtime);
-  return args.value;
+  return compute_task_result(task);
 }
 
 void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
@@ -259,9 +268,8 @@ void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Co
 
 uint64_t uint64_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
                       Context ctx, Runtime *runtime) {
-  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
   task_body(task, regions, ctx, runtime);
-  return args.value;
+  return compute_task_result(task);
 }
 
 void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
@@ -272,9 +280,8 @@ void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &r
 uint64_t uint64_replicable_leaf(const Task *task,
                                 const std::vector<PhysicalRegion> &regions, Context ctx,
                                 Runtime *runtime) {
-  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
   task_body(task, regions, ctx, runtime);
-  return args.value;
+  return compute_task_result(task);
 }
 
 void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
@@ -285,9 +292,8 @@ void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &
 uint64_t uint64_replicable_inner(const Task *task,
                                  const std::vector<PhysicalRegion> &regions, Context ctx,
                                  Runtime *runtime) {
-  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
   task_body(task, regions, ctx, runtime);
-  return args.value;
+  return compute_task_result(task);
 }
 
 struct ColorPointsArgs {
@@ -824,7 +830,7 @@ private:
   uint64_t compute_scalar_reduction() const {
     uint64_t result = REDOP::identity;
     for (uint64_t point = range_min; point <= range_max; ++point) {
-      REDOP::template apply<true>(result, task_arg_value);
+      REDOP::template apply<true>(result, point ^ task_arg_value);
     }
     return result;
   }
