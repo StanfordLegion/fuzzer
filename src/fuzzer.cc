@@ -171,7 +171,7 @@ static void write_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
 }
 
 static void modify_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
-                        uint64_t value) {
+                         uint64_t value) {
   const FieldAccessor<LEGION_READ_WRITE, uint64_t, 1, coord_t,
                       Realm::AffineAccessor<uint64_t, 1, coord_t>>
       acc(region, fid);
