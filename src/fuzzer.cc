@@ -196,14 +196,8 @@ static void mutate_region(Runtime *runtime, const IndexSpace &subspace,
         case LEGION_REDOP_SUM_UINT64: {
           reduce_field<SumReduction<uint64_t>>(region, dom, fid, redop, args.value);
         } break;
-        case LEGION_REDOP_DIFF_UINT64: {
-          reduce_field<DiffReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
         case LEGION_REDOP_PROD_UINT64: {
           reduce_field<ProdReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
-        case LEGION_REDOP_DIV_UINT64: {
-          reduce_field<DivReduction<uint64_t>>(region, dom, fid, redop, args.value);
         } break;
         case LEGION_REDOP_MIN_UINT64: {
           reduce_field<MinReduction<uint64_t>>(region, dom, fid, redop, args.value);
@@ -530,22 +524,20 @@ private:
 };
 
 static ReductionOpID select_redop(RngStream &rng) {
-  switch (rng.uniform_range(0, 7)) {
+  switch (rng.uniform_range(0, 6)) {
     case 0:
       return LEGION_REDOP_SUM_UINT64;
     case 1:
-      return LEGION_REDOP_DIFF_UINT64;
-    case 2:
       return LEGION_REDOP_PROD_UINT64;
-    case 3:
+    case 2:
       return LEGION_REDOP_MIN_UINT64;
-    case 4:
+    case 3:
       return LEGION_REDOP_MAX_UINT64;
-    case 5:
+    case 4:
       return LEGION_REDOP_AND_UINT64;
-    case 6:
+    case 5:
       return LEGION_REDOP_OR_UINT64;
-    case 7:
+    case 6:
       return LEGION_REDOP_XOR_UINT64;
     default:
       abort();
@@ -556,8 +548,6 @@ const char *redop_name(ReductionOpID redop) {
   switch (redop) {
     case LEGION_REDOP_SUM_UINT64:
       return "SumReduction<uint64_t>";
-    case LEGION_REDOP_DIFF_UINT64:
-      return "DiffReduction<uint64_t>";
     case LEGION_REDOP_PROD_UINT64:
       return "ProdReduction<uint64_t>";
     case LEGION_REDOP_MIN_UINT64:
@@ -902,8 +892,6 @@ private:
     switch (scalar_redop) {
       case LEGION_REDOP_SUM_UINT64:
         return compute_scalar_reduction<SumReduction<uint64_t>>();
-      case LEGION_REDOP_DIFF_UINT64:
-        return compute_scalar_reduction<DiffReduction<uint64_t>>();
       case LEGION_REDOP_PROD_UINT64:
         return compute_scalar_reduction<ProdReduction<uint64_t>>();
       case LEGION_REDOP_MIN_UINT64:
