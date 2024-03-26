@@ -474,7 +474,7 @@ private:
 };
 
 static ReductionOpID select_redop(RngStream &rng) {
-  switch (rng.uniform_range(0, 8)) {
+  switch (rng.uniform_range(0, 7)) {
     case 0:
       return LEGION_REDOP_SUM_INT64;
     case 1:
@@ -482,16 +482,14 @@ static ReductionOpID select_redop(RngStream &rng) {
     case 2:
       return LEGION_REDOP_PROD_INT64;
     case 3:
-      return LEGION_REDOP_DIV_INT64;
-    case 4:
       return LEGION_REDOP_MIN_INT64;
-    case 5:
+    case 4:
       return LEGION_REDOP_MAX_INT64;
-    case 6:
+    case 5:
       return LEGION_REDOP_AND_INT64;
-    case 7:
+    case 6:
       return LEGION_REDOP_OR_INT64;
-    case 8:
+    case 7:
       return LEGION_REDOP_XOR_INT64;
     default:
       abort();
