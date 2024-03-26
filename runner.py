@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-import argparse, glob, multiprocessing, os, queue, shlex, shutil, subprocess, tempfile
+import argparse, glob, multiprocessing, os, queue, shlex, shutil, subprocess, sys, tempfile
 
 
 def prefix(tid, tnum):
@@ -142,7 +142,10 @@ def report_failure(proc):
                 print(line)
         print(spy_proc.stderr.decode("utf-8"))
     else:
-        print(fuzz_proc.stderr.decode("utf-8"))
+        if fuzz_proc.stderr:
+            print(fuzz_proc.stderr.decode("utf-8"))
+        else:
+            print(fuzz_proc.stdout.decode("utf-8"))
     print()
 
 
