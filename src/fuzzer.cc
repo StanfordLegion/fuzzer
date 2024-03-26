@@ -162,11 +162,21 @@ struct PointTaskArgs {
 
 static void write_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
                         uint64_t value) {
-  const FieldAccessor<LEGION_READ_WRITE, uint64_t, 1, coord_t,
+  const FieldAccessor<LEGION_WRITE_ONLY, uint64_t, 1, coord_t,
                       Realm::AffineAccessor<uint64_t, 1, coord_t>>
       acc(region, fid);
   for (Domain::DomainPointIterator it(dom); it; ++it) {
     acc[*it] = value;
+  }
+}
+
+static void modify_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
+                        uint64_t value) {
+  const FieldAccessor<LEGION_READ_WRITE, uint64_t, 1, coord_t,
+                      Realm::AffineAccessor<uint64_t, 1, coord_t>>
+      acc(region, fid);
+  for (Domain::DomainPointIterator it(dom); it; ++it) {
+    acc[*it] = (acc[*it] >> 1) + value;
   }
 }
 
@@ -186,11 +196,15 @@ static void mutate_region(Runtime *runtime, const IndexSpace &subspace,
                           ReductionOpID redop, const std::vector<FieldID> &fields,
                           PointTaskArgs args) {
   Domain dom = runtime->get_index_space_domain(subspace);
-  if ((privilege & LEGION_WRITE_PRIV) != 0) {
+  if ((privilege & LEGION_WRITE_ONLY) == LEGION_WRITE_ONLY) {
     for (FieldID fid : fields) {
       write_field(region, dom, fid, args.value);
     }
-  } else if ((privilege & LEGION_REDUCE_PRIV) != 0) {
+  } else if (privilege == LEGION_READ_WRITE) {
+    for (FieldID fid : fields) {
+      modify_field(region, dom, fid, args.value);
+    }
+  } else if (privilege == LEGION_REDUCE) {
     for (FieldID fid : fields) {
       switch (redop) {
         case LEGION_REDOP_SUM_UINT64: {
@@ -218,6 +232,9 @@ static void mutate_region(Runtime *runtime, const IndexSpace &subspace,
           abort();
       }
     }
+  } else if ((privilege & LEGION_WRITE_PRIV) != 0) {
+    // We'd better not get here with write privileges.
+    abort();
   }
 }
 
