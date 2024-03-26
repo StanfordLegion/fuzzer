@@ -6,6 +6,10 @@
 /build
 /install
 
+# Generated Files
+legion_defines.h
+realm_defines.h
+
 # Prerequisites
 *.d
 
