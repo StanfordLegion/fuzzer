@@ -194,9 +194,10 @@ def run_tests(thread_count, num_tests, num_ops, base_seed, fuzzer_exe, spy, verb
         thread_pool.terminate()
         raise
 
-    print(f'Found {num_failed} failures')
+    print(f"Found {num_failed} failures")
     if num_failed > 0:
         sys.exit(1)
+
 
 def driver():
     parser = argparse.ArgumentParser(description="Fuzzer test harness")
