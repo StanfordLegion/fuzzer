@@ -181,17 +181,22 @@ def run_tests(thread_count, num_tests, num_ops, base_seed, fuzzer_exe, spy, verb
     thread_pool.close()
 
     num_remaining = num_queued
+    num_failed = 0
     try:
         while num_remaining > 0:
             proc = result_queue.get()
             if proc:
                 report_failure(proc)
+                num_failed += 1
             num_remaining -= 1
         thread_pool.join()
     except KeyboardInterrupt:
         thread_pool.terminate()
         raise
 
+    print(f'Found {num_failed} failures')
+    if num_failed > 0:
+        sys.exit(1)
 
 def driver():
     parser = argparse.ArgumentParser(description="Fuzzer test harness")
