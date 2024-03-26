@@ -18,6 +18,11 @@
 import argparse, glob, multiprocessing, os, queue, shlex, shutil, subprocess, tempfile
 
 
+def prefix(tid, tnum):
+    digits = len(str(tnum))
+    return f"[{tid:{digits}} of {tnum}]:"
+
+
 def run_spy(tid, tnum, spy, logfiles, verbose):
     cmd = [
         "pypy3",
@@ -32,7 +37,7 @@ def run_spy(tid, tnum, spy, logfiles, verbose):
         "--assert-warning",
     ] + logfiles
     if verbose >= 3:
-        print(f"[{tid} of {tnum}]: Running {shlex.join(cmd)}")
+        print(f"{prefix(tid, tnum)} Running {shlex.join(cmd)}")
     proc = subprocess.run(cmd, capture_output=True)
     if proc.returncode == 0:
         return
@@ -51,7 +56,7 @@ def run_fuzzer(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose, skip=None):
     else:
         cmd.extend(["-level", "4"])
     if verbose >= 3:
-        print(f"[{tid} of {tnum}]: Running {shlex.join(cmd)}")
+        print(f"{prefix(tid, tnum)} Running {shlex.join(cmd)}")
     try:
         proc = subprocess.run(cmd, capture_output=True)
         if proc.returncode == 0:
@@ -70,7 +75,7 @@ def run_fuzzer(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose, skip=None):
 
 def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
     if verbose >= 2:
-        print(f"[{tid} of {tnum}]: Bisecting {num_ops} ops at seed {seed}")
+        print(f"{prefix(tid, tnum)} Bisecting {num_ops} ops at seed {seed}")
     good = num_ops
     bad = 0
     last_failure = None
@@ -78,7 +83,7 @@ def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
         check = (good + bad) // 2
         if verbose >= 2:
             print(
-                f"[{tid} of {tnum}]: Testing {num_ops} ops (skipping {check}) at seed {seed}"
+                f"{prefix(tid, tnum)} Testing {num_ops} ops (skipping {check}) at seed {seed}"
             )
         proc = run_fuzzer(
             tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose, skip=check
@@ -93,14 +98,14 @@ def bisect_start(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
 
 def bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
     if verbose >= 2:
-        print(f"[{tid} of {tnum}]: Bisecting {num_ops} ops at seed {seed}")
+        print(f"{prefix(tid, tnum)} Bisecting {num_ops} ops at seed {seed}")
     good = 0
     bad = num_ops
     last_failure = None
     while good + 1 < bad:
         check = (good + bad) // 2
         if verbose >= 2:
-            print(f"[{tid} of {tnum}]: Testing {check} ops at seed {seed}")
+            print(f"{prefix(tid, tnum)} Testing {check} ops at seed {seed}")
         proc = run_fuzzer(tid, tnum, seed, check, fuzzer_exe, spy, verbose)
         if proc is None:
             good = check
@@ -112,40 +117,18 @@ def bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
 
 def fuzz(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose):
     if verbose >= 2:
-        print(f"[{tid} of {tnum}]: Testing {num_ops} ops at seed {seed}")
+        print(f"{prefix(tid, tnum)} Testing {num_ops} ops at seed {seed}")
     proc = run_fuzzer(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose)
     if proc is None:
         return
     if verbose >= 1:
-        print(f"[{tid} of {tnum}]: Found failure: {shlex.join(proc[0].args)}")
+        print(f"{prefix(tid, tnum)} Found failure: {shlex.join(proc[0].args)}")
     stop, stop_proc = bisect_stop(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose)
     start, start_proc = bisect_start(tid, tnum, seed, stop, fuzzer_exe, spy, verbose)
     proc = start_proc or stop_proc or proc
     if verbose >= 1:
-        print(f"[{tid} of {tnum}]: Shortest failure: {shlex.join(proc[0].args)}")
+        print(f"{prefix(tid, tnum)} Shortest failure: {shlex.join(proc[0].args)}")
     return proc
-
-
-def run_test(
-    tid,
-    tnum,
-    num_tests,
-    num_ops,
-    base_seed,
-    fuzzer_exe,
-    spy,
-    verbose,
-):
-    if verbose >= 1:
-        print(f"[{tid} of {tnum}]: Starting search")
-    initial_seed = base_seed + tid
-    failed_procs = []
-    for test_index in range(num_tests):
-        seed = initial_seed + test_index * tnum
-        proc = fuzz(tid, tnum, seed, num_ops, fuzzer_exe, spy, verbose)
-        if proc:
-            failed_procs.append(proc)
-    return failed_procs
 
 
 def report_failure(proc):
@@ -164,15 +147,14 @@ def report_failure(proc):
 
 
 def run_tests(thread_count, num_tests, num_ops, base_seed, fuzzer_exe, spy, verbose):
-    if thread_count is None:
-        thread_count = os.cpu_count()
-
-    thread_pool = multiprocessing.Pool(thread_count)
+    thread_pool = multiprocessing.Pool()
 
     result_queue = queue.Queue()
     num_queued = 0
-    for tid in range(thread_count):
+    for tid in range(num_tests):
         num_queued += 1
+
+        seed = base_seed + tid
 
         def callback(r):
             result_queue.put(r)
@@ -182,13 +164,12 @@ def run_tests(thread_count, num_tests, num_ops, base_seed, fuzzer_exe, spy, verb
             raise e
 
         thread_pool.apply_async(
-            run_test,
+            fuzz,
             (
-                tid,
-                thread_count,
+                tid + 1,
                 num_tests,
+                seed,
                 num_ops,
-                base_seed,
                 fuzzer_exe,
                 spy,
                 verbose,
@@ -202,8 +183,8 @@ def run_tests(thread_count, num_tests, num_ops, base_seed, fuzzer_exe, spy, verb
     num_remaining = num_queued
     try:
         while num_remaining > 0:
-            failed_procs = result_queue.get()
-            for proc in failed_procs:
+            proc = result_queue.get()
+            if proc:
                 report_failure(proc)
             num_remaining -= 1
         thread_pool.join()
