@@ -469,6 +469,40 @@ public:
     return true;
   }
 
+  void verify_contents() {
+    std::vector<FieldID> fields;
+    shadow_inst.get_fields(fields);
+
+    InlineLauncher launcher(
+        RegionRequirement(root, LEGION_READ_WRITE, LEGION_EXCLUSIVE, root));
+    for (FieldID field : fields) {
+      launcher.add_field(field);
+    }
+    PhysicalRegion inst = runtime->map_region(ctx, launcher);
+    inst.wait_until_valid();
+
+    Domain dom = runtime->get_index_space_domain(root.get_index_space());
+
+    for (FieldID field : fields) {
+      log_fuzz.info() << "Verifying field: " << field;
+      const FieldAccessor<LEGION_READ_ONLY, uint64_t, 1, coord_t,
+                          Realm::AffineAccessor<uint64_t, 1, coord_t>>
+          acc(inst, field);
+      const FieldAccessor<LEGION_READ_ONLY, uint64_t, 1, coord_t,
+                          Realm::AffineAccessor<uint64_t, 1, coord_t>>
+          shadow_acc(shadow_inst, field);
+      for (Domain::DomainPointIterator it(dom); it; ++it) {
+        if (acc[*it] != shadow_acc[*it]) {
+          log_fuzz.fatal() << "Bad region value: " << acc[*it]
+                           << ", expected: " << shadow_acc[*it];
+          abort();
+        }
+      }
+    }
+
+    runtime->unmap_region(ctx, inst);
+  }
+
 private:
   void color_points(const std::vector<FieldID> &colors, const FuzzerConfig &config,
                     RngSeed &seed) {
@@ -1026,6 +1060,8 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
       op.execute(runtime, ctx, futures);
     }
   }
+
+  forest.verify_contents();
 
   for (FutureCheck &check : futures) {
     uint64_t result = check.first.get_result<uint64_t>();
