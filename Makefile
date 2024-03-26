@@ -46,8 +46,8 @@ PREFIX		?= 		# Location of where to install Legion
 # Put the binary file name here
 OUTFILE		?= fuzzer
 # List all the application source files here
-CC_SRC		?=		# .c files
-CXX_SRC		?= src/fuzzer.cc src/deterministic_random.cc src/siphash.cc		# .cc files
+CC_SRC		?= src/siphash.c		# .c files
+CXX_SRC		?= src/fuzzer.cc src/deterministic_random.cc		# .cc files
 CUDA_SRC	?=		# .cu files
 FORT_SRC	?=		# .f90 files
 HIP_SRC		?=		# .cu files
@@ -55,7 +55,7 @@ ASM_SRC		?=		# .S files
 
 # You can modify these variables, some will be appended to by the runtime makefile
 INC_FLAGS	?=		# Include flags for all compilers
-CC_FLAGS	?=		# Flags for all C++ compilers
+CC_FLAGS	?= -std=c++17		# Flags for all C++ compilers
 FC_FLAGS	?=		# Flags for all Fortran compilers
 NVCC_FLAGS	?=		# Flags for all NVCC files
 HIPCC_FLAGS	?=		# Flags for all HIP files
