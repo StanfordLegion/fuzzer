@@ -181,62 +181,60 @@ static void reduce_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
   }
 }
 
+static void mutate_region(Runtime *runtime, const IndexSpace &subspace,
+                          const PhysicalRegion &region, PrivilegeMode privilege,
+                          ReductionOpID redop, const std::vector<FieldID> &fields,
+                          PointTaskArgs args) {
+  Domain dom = runtime->get_index_space_domain(subspace);
+  if ((privilege & LEGION_WRITE_PRIV) != 0) {
+    for (FieldID fid : fields) {
+      write_field(region, dom, fid, args.value);
+    }
+  } else if ((privilege & LEGION_REDUCE_PRIV) != 0) {
+    for (FieldID fid : fields) {
+      switch (redop) {
+        case LEGION_REDOP_SUM_UINT64: {
+          reduce_field<SumReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        case LEGION_REDOP_DIFF_UINT64: {
+          reduce_field<DiffReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        case LEGION_REDOP_PROD_UINT64: {
+          reduce_field<ProdReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        case LEGION_REDOP_DIV_UINT64: {
+          reduce_field<DivReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        case LEGION_REDOP_MIN_UINT64: {
+          reduce_field<MinReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        case LEGION_REDOP_MAX_UINT64: {
+          reduce_field<MaxReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        case LEGION_REDOP_AND_UINT64: {
+          reduce_field<AndReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        case LEGION_REDOP_OR_UINT64: {
+          reduce_field<OrReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        case LEGION_REDOP_XOR_UINT64: {
+          reduce_field<XorReduction<uint64_t>>(region, dom, fid, redop, args.value);
+        } break;
+        default:
+          abort();
+      }
+    }
+  }
+}
+
 static void task_body(const Task *task, const std::vector<PhysicalRegion> &regions,
                       Context ctx, Runtime *runtime) {
   const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
 
   for (size_t idx = 0; idx < task->regions.size(); ++idx) {
     const RegionRequirement &req = task->regions[idx];
-    Domain dom = runtime->get_index_space_domain(
-        regions[idx].get_logical_region().get_index_space());
-    if ((req.privilege & LEGION_WRITE_PRIV) != 0) {
-      for (FieldID fid : req.instance_fields) {
-        write_field(regions[idx], dom, fid, args.value);
-      }
-    } else if ((req.privilege & LEGION_REDUCE_PRIV) != 0) {
-      for (FieldID fid : req.instance_fields) {
-        switch (req.redop) {
-          case LEGION_REDOP_SUM_UINT64: {
-            reduce_field<SumReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                 args.value);
-          } break;
-          case LEGION_REDOP_DIFF_UINT64: {
-            reduce_field<DiffReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                  args.value);
-          } break;
-          case LEGION_REDOP_PROD_UINT64: {
-            reduce_field<ProdReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                  args.value);
-          } break;
-          case LEGION_REDOP_DIV_UINT64: {
-            reduce_field<DivReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                 args.value);
-          } break;
-          case LEGION_REDOP_MIN_UINT64: {
-            reduce_field<MinReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                 args.value);
-          } break;
-          case LEGION_REDOP_MAX_UINT64: {
-            reduce_field<MaxReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                 args.value);
-          } break;
-          case LEGION_REDOP_AND_UINT64: {
-            reduce_field<AndReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                 args.value);
-          } break;
-          case LEGION_REDOP_OR_UINT64: {
-            reduce_field<OrReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                args.value);
-          } break;
-          case LEGION_REDOP_XOR_UINT64: {
-            reduce_field<XorReduction<uint64_t>>(regions[idx], dom, fid, req.redop,
-                                                 args.value);
-          } break;
-          default:
-            abort();
-        }
-      }
-    }
+    mutate_region(runtime, req.region.get_index_space(), regions[idx], req.privilege,
+                  req.redop, req.instance_fields, args);
   }
 }
 
@@ -351,6 +349,7 @@ public:
       }
     }
     root = runtime->create_logical_region(ctx, ispace, fspace);
+    shadow_root = runtime->create_logical_region(ctx, ispace, fspace);
 
     color_space = runtime->create_index_space<1>(
         ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width - 1)));
@@ -400,10 +399,23 @@ public:
     // Initialize everything so we don't get unitialized read warnings
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
       runtime->fill_field<uint64_t>(ctx, root, root, field, field);
+      runtime->fill_field<uint64_t>(ctx, shadow_root, shadow_root, field, field);
     }
+
+    // Inline map the shadow region for direct access.
+    InlineLauncher launcher(
+        RegionRequirement(shadow_root, LEGION_READ_WRITE, LEGION_EXCLUSIVE, shadow_root));
+    for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
+      launcher.add_field(field);
+    }
+    shadow_inst = runtime->map_region(ctx, launcher);
+    shadow_inst.wait_until_valid();
   }
 
   ~RegionForest() {
+    runtime->unmap_region(ctx, shadow_inst);
+    shadow_inst = PhysicalRegion();  // clear reference to instance
+    runtime->destroy_logical_region(ctx, shadow_root);
     runtime->destroy_logical_region(ctx, root);
     runtime->destroy_field_space(ctx, fspace);
     runtime->destroy_index_space(ctx, ispace);
@@ -411,6 +423,8 @@ public:
   }
 
   LogicalRegion get_root() const { return root; }
+  LogicalRegion get_shadow_root() const { return shadow_root; }
+  PhysicalRegion &get_shadow_inst() { return shadow_inst; }
 
   LogicalPartition select_disjoint_partition(RngStream &rng) {
     uint64_t num_disjoint = disjoint_partitions.size();
@@ -462,7 +476,7 @@ private:
     TaskLauncher launcher(COLOR_POINTS_TASK_ID, TaskArgument(&args, sizeof(args)));
     launcher.add_region_requirement(
         RegionRequirement(root, std::set<FieldID>(colors.begin(), colors.end()), colors,
-                          WRITE_DISCARD, EXCLUSIVE, root));
+                          LEGION_WRITE_DISCARD, LEGION_EXCLUSIVE, root));
     launcher.elide_future_return = true;
     runtime->execute_task(ctx, launcher);
   }
@@ -473,6 +487,8 @@ private:
   IndexSpaceT<1> ispace;
   FieldSpace fspace;
   LogicalRegion root;
+  LogicalRegion shadow_root;
+  PhysicalRegion shadow_inst;
   IndexSpaceT<1> color_space;
   std::vector<IndexPartition> disjoint_partitions;
   std::vector<IndexPartition> aliased_partitions;
@@ -637,35 +653,45 @@ private:
   }
 
 public:
-  void add_to_index_task(IndexTaskLauncher &launcher) {
+  void add_to_index_task(IndexTaskLauncher &launcher) const {
     if (!fields.empty()) {
       assert(projection != LEGION_MAX_APPLICATION_PROJECTION_ID);
       if (privilege == LEGION_REDUCE) {
         launcher.add_region_requirement(RegionRequirement(
             partition, projection, std::set<FieldID>(fields.begin(), fields.end()),
-            fields, redop, EXCLUSIVE, forest.get_root()));
+            fields, redop, LEGION_EXCLUSIVE, forest.get_root()));
       } else {
         launcher.add_region_requirement(RegionRequirement(
             partition, projection, std::set<FieldID>(fields.begin(), fields.end()),
-            fields, privilege, EXCLUSIVE, forest.get_root()));
+            fields, privilege, LEGION_EXCLUSIVE, forest.get_root()));
       }
     }
   }
 
-  void add_to_single_task(Runtime *runtime, TaskLauncher &launcher, Point<1> point) {
+  void add_to_single_task(Runtime *runtime, TaskLauncher &launcher,
+                          Point<1> point) const {
     if (!fields.empty()) {
       LogicalRegion subregion =
           runtime->get_logical_subregion_by_color(partition, point[0]);
       if (privilege == LEGION_REDUCE) {
         launcher.add_region_requirement(
             RegionRequirement(subregion, std::set<FieldID>(fields.begin(), fields.end()),
-                              fields, redop, EXCLUSIVE, forest.get_root()));
+                              fields, redop, LEGION_EXCLUSIVE, forest.get_root()));
       } else {
         launcher.add_region_requirement(
             RegionRequirement(subregion, std::set<FieldID>(fields.begin(), fields.end()),
-                              fields, privilege, EXCLUSIVE, forest.get_root()));
+                              fields, privilege, LEGION_EXCLUSIVE, forest.get_root()));
       }
     }
+  }
+
+  LogicalRegion project(Point<1> point, Rect<1> launch_domain) const {
+    if (projection == LEGION_MAX_APPLICATION_PROJECTION_ID) {
+      return LogicalRegion::NO_REGION;
+    }
+
+    ProjectionFunctor *functor = Runtime::get_projection_functor(projection);
+    return functor->project(partition, point, launch_domain);
   }
 
   void display(Runtime *runtime, Context ctx) const {
@@ -708,7 +734,10 @@ using FutureCheck = std::pair<Future, uint64_t>;
 class OperationBuilder {
 public:
   OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
-      : config(_config), launch_domain(Rect<1>::make_empty()), req(_config, _forest) {}
+      : config(_config),
+        forest(_forest),
+        launch_domain(Rect<1>::make_empty()),
+        req(_config, _forest) {}
 
   void build(RngStream &rng) {
     select_launch_type(rng);
@@ -860,8 +889,9 @@ private:
 
   void execute_index_task(Runtime *runtime, Context ctx,
                           std::vector<FutureCheck> &futures) {
-    TaskArgument arg(&task_arg_value, sizeof(task_arg_value));
-    IndexTaskLauncher launcher(task_id, launch_domain, arg, ArgumentMap());
+    PointTaskArgs args(task_arg_value);
+    IndexTaskLauncher launcher(task_id, launch_domain, TaskArgument(&args, sizeof(args)),
+                               ArgumentMap());
     req.add_to_index_task(launcher);
     if (elide_future_return) {
       launcher.elide_future_return = true;
@@ -876,13 +906,26 @@ private:
     } else {
       runtime->execute_index_space(ctx, launcher);
     }
+
+    // Now we run the task body on the shadow copy for verification.
+    if (!launcher.region_requirements.empty()) {
+      RegionRequirement &creq = launcher.region_requirements[0];
+      for (uint64_t point = range_min; point <= range_max; ++point) {
+        IndexSpace subspace =
+            req.project(Point<1>(point), launch_domain).get_index_space();
+        PhysicalRegion &shadow_inst = forest.get_shadow_inst();
+
+        mutate_region(runtime, subspace, shadow_inst, creq.privilege, creq.redop,
+                      creq.instance_fields, args);
+      }
+    }
   }
 
   void execute_single_task(Runtime *runtime, Context ctx,
                            std::vector<FutureCheck> &futures) {
     for (uint64_t point = range_min; point <= range_max; ++point) {
-      TaskArgument arg(&task_arg_value, sizeof(task_arg_value));
-      TaskLauncher launcher(task_id, arg);
+      PointTaskArgs args(task_arg_value);
+      TaskLauncher launcher(task_id, TaskArgument(&args, sizeof(args)));
       launcher.point =
           Point<1>((point - range_min + shard_offset) % range_size + range_min);
       LOG_ONCE(log_fuzz.info() << "  Task: " << point);
@@ -902,6 +945,16 @@ private:
         runtime->execute_task(ctx, launcher);
       }
       runtime->destroy_index_space(ctx, launch_space);
+
+      // Now we run the task body on the shadow copy for verification.
+      if (!launcher.region_requirements.empty()) {
+        RegionRequirement &creq = launcher.region_requirements[0];
+        IndexSpace subspace = creq.region.get_index_space();
+        PhysicalRegion &shadow_inst = forest.get_shadow_inst();
+
+        mutate_region(runtime, subspace, shadow_inst, creq.privilege, creq.redop,
+                      creq.instance_fields, args);
+      }
     }
   }
 
@@ -932,6 +985,7 @@ private:
 
 private:
   const FuzzerConfig &config;
+  RegionForest &forest;
   LaunchType launch_type = LaunchType::INVALID;
   TaskID task_id = LEGION_MAX_APPLICATION_TASK_ID;
   bool task_produces_value = false;
@@ -994,7 +1048,6 @@ int main(int argc, char **argv) {
   {
     TaskVariantRegistrar registrar(TOP_LEVEL_TASK_ID, "top_level");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
-    registrar.set_inner();
     registrar.set_replicable();
     Runtime::preregister_task_variant<top_level>(registrar, "top_level");
   }
