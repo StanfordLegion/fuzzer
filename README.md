@@ -40,7 +40,7 @@ number of tests to run. The setting of `REALM_SYNTHETIC_CORE_MAP=` helps to
 ensure that the fuzzer makes full use of your machine.
 
 Every run of the fuzzer is validated to ensure it produces the correct output
-(and does not crash). Crashing configurations will be minimized and then
+(and does not crash). Failing configurations will be minimized and then
 reported to the user, along with their failure mode.
 
 ## Design
@@ -67,10 +67,10 @@ parameters includes:
 
 The `execute()` method constructs the corresponding `Launcher` object and runs
 it. In addition, it runs the same task body locally within the top-level task
-on separate, shadow region tree to compute the result of a serial execution of
-exactly the same operations. Because Legions semantics are sequential, this
-(by definition) is the correct output of the program, and deviation from this
-is a Legion bug.
+on a separate, "shadow" copy of the region tree to compute the result of a
+serial execution of exactly the same operations. Because Legion's semantics
+are sequential, this (by definition) is the correct output of the program, and
+deviation from this is a Legion bug.
 
 Note that Legion supports features that permit nondeterministic execution
 (e.g., floating point reductions, relaxed coherence modes). The fuzzer avoids
