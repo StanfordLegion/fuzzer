@@ -27,11 +27,11 @@ if [[ $FUZZER_INSTALL_LEGION -eq 1 ]]; then
             -DCMAKE_INSTALL_PREFIX=$PWD/../install
             -DCMAKE_CXX_STANDARD=17
             -DCMAKE_CXX_FLAGS_DEBUG='-g -O2' # improve performance of debug code
-            -DLegion_SPY=ON
             -DBUILD_SHARED_LIBS=ON # to improve link speed
         )
         if [[ $FUZZER_DEBUG -eq 1 ]]; then
             legion_flags+=(
+                -DLegion_SPY=ON
                 -DBUILD_MARCH= # to avoid -march=native for valgrind compatibility
             )
         fi
