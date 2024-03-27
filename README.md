@@ -72,9 +72,9 @@ serial execution of exactly the same operations. Because Legion's semantics
 are sequential, this (by definition) is the correct output of the program, and
 deviation from this is a Legion bug.
 
-It is VERY IMPORTANT that the `execute()` *never* consult the random number
-generator *for any purpose*. This is to ensure that the trace, or set of
-operations to be executed, remains stable even if some of the earlier
+It is VERY IMPORTANT that the `execute()` method *never* consult the random
+number generator *for any purpose*. This is to ensure that the trace, or set
+of operations to be executed, remains stable even if some of the earlier
 operations in the trace are skipped. (Minimizing the trace is an important
 step for debugging. Shorter traces are easier to debug.) When we find a
 failure we bisect the trace from both sides to locate the latest point to
