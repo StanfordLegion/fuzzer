@@ -259,6 +259,25 @@ uint64_t compute_task_result(const Task *task) {
   return point ^ args.value;
 }
 
+static Future inner_task_body(const Task *task,
+                              const std::vector<PhysicalRegion> &regions, Context ctx,
+                              Runtime *runtime) {
+  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
+  TaskLauncher launcher(UINT64_LEAF_TASK_ID, TaskArgument(&args, sizeof(args)));
+  assert(task->regions.size() == 1);
+  const RegionRequirement &req = task->regions[0];
+  if (req.privilege == LEGION_REDUCE) {
+    launcher.add_region_requirement(RegionRequirement(req.region, req.privilege_fields,
+                                                      req.instance_fields, req.redop,
+                                                      LEGION_EXCLUSIVE, req.region));
+  } else {
+    launcher.add_region_requirement(RegionRequirement(req.region, req.privilege_fields,
+                                                      req.instance_fields, req.privilege,
+                                                      LEGION_EXCLUSIVE, req.region));
+  }
+  return runtime->execute_task(ctx, launcher);
+}
+
 void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
                Runtime *runtime) {
   task_body(task, regions, ctx, runtime);
@@ -272,13 +291,13 @@ uint64_t uint64_leaf(const Task *task, const std::vector<PhysicalRegion> &region
 
 void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
                 Runtime *runtime) {
-  task_body(task, regions, ctx, runtime);
+  inner_task_body(task, regions, ctx, runtime);
 }
 
 uint64_t uint64_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
                       Context ctx, Runtime *runtime) {
-  task_body(task, regions, ctx, runtime);
-  return compute_task_result(task);
+  Future result = inner_task_body(task, regions, ctx, runtime);
+  return result.get_result<uint64_t>();
 }
 
 void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
@@ -295,14 +314,14 @@ uint64_t uint64_replicable_leaf(const Task *task,
 
 void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
                            Context ctx, Runtime *runtime) {
-  task_body(task, regions, ctx, runtime);
+  inner_task_body(task, regions, ctx, runtime);
 }
 
 uint64_t uint64_replicable_inner(const Task *task,
                                  const std::vector<PhysicalRegion> &regions, Context ctx,
                                  Runtime *runtime) {
-  task_body(task, regions, ctx, runtime);
-  return compute_task_result(task);
+  Future result = inner_task_body(task, regions, ctx, runtime);
+  return result.get_result<uint64_t>();
 }
 
 struct ColorPointsArgs {
@@ -540,6 +559,52 @@ private:
   std::map<FieldID, ReductionOpID> last_field_redop;
 };
 
+const char *task_name(TaskID task_id) {
+  switch (task_id) {
+    case VOID_LEAF_TASK_ID:
+      return "VOID_LEAF_TASK_ID";
+    case UINT64_LEAF_TASK_ID:
+      return "_LEAF_TASK_ID";
+    case VOID_INNER_TASK_ID:
+      return "VOID_INNER_TASK_ID";
+    case UINT64_INNER_TASK_ID:
+      return "_INNER_TASK_ID";
+    case VOID_REPLICABLE_LEAF_TASK_ID:
+      return "VOID_REPLICABLE_LEAF_TASK_ID";
+    case UINT64_REPLICABLE_LEAF_TASK_ID:
+      return "_REPLICABLE_LEAF_TASK_ID";
+    case VOID_REPLICABLE_INNER_TASK_ID:
+      return "VOID_REPLICABLE_INNER_TASK_ID";
+    case UINT64_REPLICABLE_INNER_TASK_ID:
+      return "_REPLICABLE_INNER_TASK_ID";
+    case COLOR_POINTS_TASK_ID:
+      return "COLOR_POINTS_TASK_ID";
+    case TOP_LEVEL_TASK_ID:
+      return "TOP_LEVEL_TASK_ID";
+    default:
+      abort();
+  }
+}
+
+const char *privilege_name(PrivilegeMode privilege) {
+  switch (privilege) {
+    case LEGION_NO_ACCESS:
+      return "LEGION_NO_ACCESS";
+    case LEGION_READ_ONLY:
+      return "LEGION_READ_ONLY";
+    case LEGION_REDUCE:
+      return "LEGION_REDUCE";
+    case LEGION_READ_WRITE:
+      return "LEGION_READ_WRITE";
+    case LEGION_WRITE_ONLY:
+      return "LEGION_WRITE_ONLY";
+    case LEGION_WRITE_DISCARD:
+      return "LEGION_WRITE_DISCARD";
+    default:
+      abort();
+  }
+}
+
 static ReductionOpID select_redop(RngStream &rng) {
   switch (rng.uniform_range(0, 6)) {
     case 0:
@@ -744,7 +809,7 @@ public:
       }
       LOG_ONCE(msg);
     }
-    LOG_ONCE(log_fuzz.info() << "  Privilege: 0x" << std::hex << privilege);
+    LOG_ONCE(log_fuzz.info() << "  Privilege: " << privilege_name(privilege));
     if (redop != LEGION_REDOP_LAST) {
       LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop_name(redop));
     }
@@ -806,7 +871,7 @@ private:
   }
 
   void select_task_id(RngStream &rng) {
-    switch (rng.uniform_range(0, 1)) {
+    switch (rng.uniform_range(0, 3)) {
       case 0: {
         task_id = VOID_LEAF_TASK_ID;
         task_produces_value = false;
@@ -815,15 +880,14 @@ private:
         task_id = UINT64_LEAF_TASK_ID;
         task_produces_value = true;
       } break;
-      // FIXME: https://github.com/StanfordLegion/legion/issues/1659
-      // case 2: {
-      //   task_id = VOID_INNER_TASK_ID;
-      //   task_produces_value = false;
-      // } break;
-      // case 3: {
-      //   task_id = UINT64_INNER_TASK_ID;
-      //   task_produces_value = true;
-      // } break;
+      case 2: {
+        task_id = VOID_INNER_TASK_ID;
+        task_produces_value = false;
+      } break;
+      case 3: {
+        task_id = UINT64_INNER_TASK_ID;
+        task_produces_value = true;
+      } break;
       default:
         abort();
     }
@@ -1009,7 +1073,7 @@ private:
         abort();
     }
 
-    LOG_ONCE(log_fuzz.info() << "  Task ID: " << task_id);
+    LOG_ONCE(log_fuzz.info() << "  Task ID: " << task_name(task_id));
     LOG_ONCE(log_fuzz.info() << "  Launch domain: " << launch_domain);
     if (scalar_redop != LEGION_REDOP_LAST) {
       LOG_ONCE(log_fuzz.info() << "  Scalar redop: " << redop_name(scalar_redop));
