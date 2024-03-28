@@ -150,7 +150,11 @@ protected:
 
 template <typename T>
 const T unpack_args(const Task *task) {
-  assert(task->arglen == sizeof(T));
+  if (task->arglen != sizeof(T)) {
+    log_fuzz.fatal() << "Wrong size in unpack_args: " << task->arglen
+                     << ", expected: " << sizeof(T);
+    abort();
+  }
   const T result = *reinterpret_cast<T *>(task->args);
   return result;
 }
@@ -259,23 +263,23 @@ uint64_t compute_task_result(const Task *task) {
   return point ^ args.value;
 }
 
-static Future inner_task_body(const Task *task,
-                              const std::vector<PhysicalRegion> &regions, Context ctx,
-                              Runtime *runtime) {
-  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
-  TaskLauncher launcher(UINT64_LEAF_TASK_ID, TaskArgument(&args, sizeof(args)));
-  assert(task->regions.size() == 1);
-  const RegionRequirement &req = task->regions[0];
-  if (req.privilege == LEGION_REDUCE) {
-    launcher.add_region_requirement(RegionRequirement(req.region, req.privilege_fields,
-                                                      req.instance_fields, req.redop,
-                                                      LEGION_EXCLUSIVE, req.region));
-  } else {
-    launcher.add_region_requirement(RegionRequirement(req.region, req.privilege_fields,
-                                                      req.instance_fields, req.privilege,
-                                                      LEGION_EXCLUSIVE, req.region));
+static void inner_task_body(const Task *task, const std::vector<PhysicalRegion> &regions,
+                            Context ctx, Runtime *runtime) {
+  Future result;
+  for (size_t idx = 0; idx < task->regions.size(); ++idx) {
+    TaskLauncher launcher(VOID_LEAF_TASK_ID, TaskArgument(task->args, task->arglen));
+    const RegionRequirement &req = task->regions[idx];
+    if (req.privilege == LEGION_REDUCE) {
+      launcher.add_region_requirement(RegionRequirement(req.region, req.privilege_fields,
+                                                        req.instance_fields, req.redop,
+                                                        LEGION_EXCLUSIVE, req.region));
+    } else {
+      launcher.add_region_requirement(
+          RegionRequirement(req.region, req.privilege_fields, req.instance_fields,
+                            req.privilege, LEGION_EXCLUSIVE, req.region));
+    }
+    runtime->execute_task(ctx, launcher);
   }
-  return runtime->execute_task(ctx, launcher);
 }
 
 void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
@@ -296,8 +300,8 @@ void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Co
 
 uint64_t uint64_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
                       Context ctx, Runtime *runtime) {
-  Future result = inner_task_body(task, regions, ctx, runtime);
-  return result.get_result<uint64_t>();
+  inner_task_body(task, regions, ctx, runtime);
+  return compute_task_result(task);
 }
 
 void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
@@ -320,8 +324,8 @@ void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &
 uint64_t uint64_replicable_inner(const Task *task,
                                  const std::vector<PhysicalRegion> &regions, Context ctx,
                                  Runtime *runtime) {
-  Future result = inner_task_body(task, regions, ctx, runtime);
-  return result.get_result<uint64_t>();
+  inner_task_body(task, regions, ctx, runtime);
+  return compute_task_result(task);
 }
 
 struct ColorPointsArgs {
@@ -564,19 +568,19 @@ const char *task_name(TaskID task_id) {
     case VOID_LEAF_TASK_ID:
       return "VOID_LEAF_TASK_ID";
     case UINT64_LEAF_TASK_ID:
-      return "_LEAF_TASK_ID";
+      return "UINT64_LEAF_TASK_ID";
     case VOID_INNER_TASK_ID:
       return "VOID_INNER_TASK_ID";
     case UINT64_INNER_TASK_ID:
-      return "_INNER_TASK_ID";
+      return "UINT64_INNER_TASK_ID";
     case VOID_REPLICABLE_LEAF_TASK_ID:
       return "VOID_REPLICABLE_LEAF_TASK_ID";
     case UINT64_REPLICABLE_LEAF_TASK_ID:
-      return "_REPLICABLE_LEAF_TASK_ID";
+      return "UINT64_REPLICABLE_LEAF_TASK_ID";
     case VOID_REPLICABLE_INNER_TASK_ID:
       return "VOID_REPLICABLE_INNER_TASK_ID";
     case UINT64_REPLICABLE_INNER_TASK_ID:
-      return "_REPLICABLE_INNER_TASK_ID";
+      return "UINT64_REPLICABLE_INNER_TASK_ID";
     case COLOR_POINTS_TASK_ID:
       return "COLOR_POINTS_TASK_ID";
     case TOP_LEVEL_TASK_ID:
@@ -606,20 +610,21 @@ const char *privilege_name(PrivilegeMode privilege) {
 }
 
 static ReductionOpID select_redop(RngStream &rng) {
-  switch (rng.uniform_range(0, 6)) {
+  switch (rng.uniform_range(0, 5)) {
     case 0:
       return LEGION_REDOP_SUM_UINT64;
+    // FIXME: shut off prod reduction because it seems to have bad behavior with inner
+    // case 1:
+    //   return LEGION_REDOP_PROD_UINT64;
     case 1:
-      return LEGION_REDOP_PROD_UINT64;
-    case 2:
       return LEGION_REDOP_MIN_UINT64;
-    case 3:
+    case 2:
       return LEGION_REDOP_MAX_UINT64;
-    case 4:
+    case 3:
       return LEGION_REDOP_AND_UINT64;
-    case 5:
+    case 4:
       return LEGION_REDOP_OR_UINT64;
-    case 6:
+    case 5:
       return LEGION_REDOP_XOR_UINT64;
     default:
       abort();
@@ -652,10 +657,11 @@ public:
   RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config), forest(_forest) {}
 
-  void build(RngStream &rng, bool launch_complete, bool requires_projection) {
+  void build(RngStream &rng, bool launch_complete, bool requires_projection,
+             bool task_is_inner) {
     select_fields(rng);
-    select_privilege(rng);
-    select_reduction(rng, launch_complete);
+    select_privilege(rng, task_is_inner);
+    select_reduction(rng, launch_complete, task_is_inner);
     select_projection(rng, requires_projection);
     select_partition(rng, requires_projection);
   }
@@ -672,7 +678,7 @@ private:
     }
   }
 
-  void select_privilege(RngStream &rng) {
+  void select_privilege(RngStream &rng, bool task_is_inner) {
     switch (rng.uniform_range(0, 4)) {
       case 0: {
         privilege = LEGION_NO_ACCESS;
@@ -692,9 +698,14 @@ private:
       default:
         abort();
     }
+
+    if (task_is_inner && ((privilege & LEGION_WRITE_PRIV) != 0)) {
+      // FIXME: https://github.com/StanfordLegion/legion/issues/1659
+      privilege = LEGION_REDUCE;
+    }
   }
 
-  void select_reduction(RngStream &rng, bool launch_complete) {
+  void select_reduction(RngStream &rng, bool launch_complete, bool task_is_inner) {
     redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
       ReductionOpID last_redop;
@@ -706,7 +717,13 @@ private:
       } else if (!ok) {
         // Two or more fields had conflicting redops, so there's no way to
         // pick a single one across the entire set. Fall back to read-write.
-        privilege = LEGION_READ_WRITE;
+        if (!task_is_inner) {
+          privilege = LEGION_READ_WRITE;
+        } else {
+          // Unless the task is inner, in which case we're impacted by
+          // https://github.com/StanfordLegion/legion/issues/1659
+          privilege = LEGION_READ_ONLY;
+        }
       } else {
         // No previous reduction, we're ok to go ahead and pick.
         redop = select_redop(rng);
@@ -871,10 +888,11 @@ private:
   }
 
   void select_task_id(RngStream &rng) {
+    task_produces_value = false;
+    task_is_inner = false;
     switch (rng.uniform_range(0, 3)) {
       case 0: {
         task_id = VOID_LEAF_TASK_ID;
-        task_produces_value = false;
       } break;
       case 1: {
         task_id = UINT64_LEAF_TASK_ID;
@@ -882,11 +900,12 @@ private:
       } break;
       case 2: {
         task_id = VOID_INNER_TASK_ID;
-        task_produces_value = false;
+        task_is_inner = true;
       } break;
       case 3: {
         task_id = UINT64_INNER_TASK_ID;
         task_produces_value = true;
+        task_is_inner = true;
       } break;
       default:
         abort();
@@ -928,7 +947,7 @@ private:
   }
 
   void select_region_requirement(RngStream &rng) {
-    req.build(rng, launch_complete, launch_type == LaunchType::INDEX_TASK);
+    req.build(rng, launch_complete, launch_type == LaunchType::INDEX_TASK, task_is_inner);
   }
 
   void select_shard_offset(RngStream &rng) {
@@ -1092,6 +1111,7 @@ private:
   LaunchType launch_type = LaunchType::INVALID;
   TaskID task_id = LEGION_MAX_APPLICATION_TASK_ID;
   bool task_produces_value = false;
+  bool task_is_inner = false;
   bool launch_complete = false;
   uint64_t range_min = 0;
   uint64_t range_max = 0;
