@@ -157,7 +157,7 @@ def report_failure(proc):
 def run_tests(
     thread_count, num_tests, num_ops, base_seed, extra_args, fuzzer, spy, verbose
 ):
-    thread_pool = multiprocessing.Pool()
+    thread_pool = multiprocessing.Pool(thread_count)
 
     result_queue = queue.Queue()
     num_queued = 0
