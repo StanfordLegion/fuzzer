@@ -424,9 +424,10 @@ public:
           aliased_partitions.push_back(part);
         }
 
-        for (FieldID color : colors) {
-          falloc.free_field(color);
-        }
+        // FIXME: https://github.com/StanfordLegion/legion/issues/1666
+        // for (FieldID color : colors) {
+        //   falloc.free_field(color);
+        // }
       }
     }
 
