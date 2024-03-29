@@ -658,11 +658,10 @@ public:
   RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config), forest(_forest) {}
 
-  void build(RngStream &rng, bool launch_complete, bool requires_projection,
-             bool task_is_inner) {
+  void build(RngStream &rng, bool launch_complete, bool requires_projection) {
     select_fields(rng);
-    select_privilege(rng, task_is_inner);
-    select_reduction(rng, launch_complete, task_is_inner);
+    select_privilege(rng);
+    select_reduction(rng, launch_complete);
     select_projection(rng, requires_projection);
     select_partition(rng, requires_projection);
   }
@@ -679,7 +678,7 @@ private:
     }
   }
 
-  void select_privilege(RngStream &rng, bool task_is_inner) {
+  void select_privilege(RngStream &rng) {
     switch (rng.uniform_range(0, 4)) {
       case 0: {
         privilege = LEGION_NO_ACCESS;
@@ -699,14 +698,9 @@ private:
       default:
         abort();
     }
-
-    if (task_is_inner && ((privilege & LEGION_WRITE_PRIV) != 0)) {
-      // FIXME: https://github.com/StanfordLegion/legion/issues/1659
-      privilege = LEGION_REDUCE;
-    }
   }
 
-  void select_reduction(RngStream &rng, bool launch_complete, bool task_is_inner) {
+  void select_reduction(RngStream &rng, bool launch_complete) {
     redop = LEGION_REDOP_LAST;
     if (privilege == LEGION_REDUCE) {
       ReductionOpID last_redop;
@@ -718,13 +712,7 @@ private:
       } else if (!ok) {
         // Two or more fields had conflicting redops, so there's no way to
         // pick a single one across the entire set. Fall back to read-write.
-        if (!task_is_inner) {
-          privilege = LEGION_READ_WRITE;
-        } else {
-          // Unless the task is inner, in which case we're impacted by
-          // https://github.com/StanfordLegion/legion/issues/1659
-          privilege = LEGION_READ_ONLY;
-        }
+        privilege = LEGION_READ_WRITE;
       } else {
         // No previous reduction, we're ok to go ahead and pick.
         redop = select_redop(rng);
@@ -890,7 +878,6 @@ private:
 
   void select_task_id(RngStream &rng) {
     task_produces_value = false;
-    task_is_inner = false;
     switch (rng.uniform_range(0, 3)) {
       case 0: {
         task_id = VOID_LEAF_TASK_ID;
@@ -901,12 +888,10 @@ private:
       } break;
       case 2: {
         task_id = VOID_INNER_TASK_ID;
-        task_is_inner = true;
       } break;
       case 3: {
         task_id = UINT64_INNER_TASK_ID;
         task_produces_value = true;
-        task_is_inner = true;
       } break;
       default:
         abort();
@@ -948,7 +933,7 @@ private:
   }
 
   void select_region_requirement(RngStream &rng) {
-    req.build(rng, launch_complete, launch_type == LaunchType::INDEX_TASK, task_is_inner);
+    req.build(rng, launch_complete, launch_type == LaunchType::INDEX_TASK);
   }
 
   void select_shard_offset(RngStream &rng) {
@@ -1112,7 +1097,6 @@ private:
   LaunchType launch_type = LaunchType::INVALID;
   TaskID task_id = LEGION_MAX_APPLICATION_TASK_ID;
   bool task_produces_value = false;
-  bool task_is_inner = false;
   bool launch_complete = false;
   uint64_t range_min = 0;
   uint64_t range_max = 0;
