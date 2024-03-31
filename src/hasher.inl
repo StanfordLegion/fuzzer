@@ -200,7 +200,9 @@ void Hasher::hash(const T &value) {
 
 template <typename T>
 void Hasher::hash_value(const T &value) {
+  // Ensure we use this only on POD types with no padding.
   static_assert(std::is_trivially_copyable_v<T>);
+  static_assert(std::has_unique_object_representations_v<T>);
   buffer.write(reinterpret_cast<const char *>(&value), sizeof(value));
 }
 
