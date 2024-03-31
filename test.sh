@@ -64,4 +64,4 @@ make -j${FUZZER_THREADS:-4}
 popd
 
 export REALM_SYNTHETIC_CORE_MAP=
-./runner.py --fuzzer=$PWD/build/src/fuzzer -j${FUZZER_THREADS:-4}
+./runner.py --fuzzer=$PWD/build/src/fuzzer -j${FUZZER_THREADS:-4} -n1000
