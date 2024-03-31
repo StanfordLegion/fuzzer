@@ -25,5 +25,5 @@ jobs:
       - run: ./test.sh
         env:
           FUZZER_DEBUG: ${{ matrix.debug }}
-          FUZZER_INSTALL_DEPS: '1'
+          FUZZER_INSTALL_DEPS: ${{ !contains(matrix.os, 'macos') && '1' || '0' }}
           SUDO_COMMAND: sudo
