@@ -844,7 +844,7 @@ public:
     if (redop != LEGION_REDOP_LAST) {
       LOG_ONCE(log_fuzz.info() << "  Region redop: " << redop_name(redop));
     }
-    if (projection == LEGION_MAX_APPLICATION_PROJECTION_ID) {
+    if (projection != LEGION_MAX_APPLICATION_PROJECTION_ID) {
       LOG_ONCE(log_fuzz.info() << "  Projection: " << projection);
     }
     LOG_ONCE(log_fuzz.info() << "  Partition: " << partition);
