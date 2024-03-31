@@ -14,6 +14,7 @@
  */
 
 enum HashTypeTag {
+  LONG_LONG_TYPE_ID,
   INT32_T_TYPE_ID,
   UINT32_T_TYPE_ID,
   INT64_T_TYPE_ID,
@@ -77,6 +78,7 @@ private:
     friend class HashTypeTagAdapter;                                                 \
   };
 
+DECLARE_TYPE_ADAPTER(long long, LONG_LONG_TYPE_ID)
 DECLARE_TYPE_ADAPTER(int32_t, INT32_T_TYPE_ID)
 DECLARE_TYPE_ADAPTER(uint32_t, UINT32_T_TYPE_ID)
 DECLARE_TYPE_ADAPTER(int64_t, INT64_T_TYPE_ID)
@@ -122,6 +124,7 @@ private:
     friend class HashValueAdapter;                              \
   };
 
+DECLARE_SIMPLE_VALUE_ADAPTER(long long)
 DECLARE_SIMPLE_VALUE_ADAPTER(int32_t)
 DECLARE_SIMPLE_VALUE_ADAPTER(uint32_t)
 DECLARE_SIMPLE_VALUE_ADAPTER(int64_t)
