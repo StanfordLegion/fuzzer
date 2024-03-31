@@ -14,7 +14,7 @@ jobs:
       - run: CHECK_FORMAT=1 ./format.sh
 
   legion:
-    name: Fuzzer (DEBUG=${{ matrix.debug }})
+    name: Fuzzer (${{ matrix.os }}, DEBUG=${{ matrix.debug }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
