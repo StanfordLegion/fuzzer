@@ -39,13 +39,14 @@ enum TaskIDs {
 enum ProjectionIDs {
   PROJECTION_OFFSET_1_ID = 1,
   PROJECTION_OFFSET_2_ID = 2,
-  PROJECTION_LAST_DISJOINT_ID = PROJECTION_OFFSET_2_ID,
-  PROJECTION_RANDOM_DEPTH_1_ID = 3,
+  PROJECTION_RANDOM_DEPTH_0_ID = 3,
 };
 
 #define LOG_ONCE(x) runtime->log_once(ctx, (x))
 
 static Logger log_fuzz("fuzz");
+
+static RngSeed root_seed;
 
 static long long parse_long_long(const std::string &flag, const std::string &arg) {
   long long result;
@@ -146,6 +147,26 @@ public:
 
 protected:
   uint64_t offset;
+};
+
+class RandomProjection : public ProjectionFunctor {
+public:
+  RandomProjection(RngStream _stream) : stream(_stream) {}
+  bool is_functional(void) const override { return true; }
+  bool is_invertible(void) const override { return false; }
+  unsigned get_depth(void) const override { return 0; }
+  LogicalRegion project(LogicalPartition upper_bound, const DomainPoint &point,
+                        const Domain &launch_domain) override {
+    RngChannel rng = stream.make_channel(std::pair(point, launch_domain));
+    Domain color_space =
+        runtime->get_index_partition_color_space(upper_bound.get_index_partition());
+    Rect<1> rect = color_space;
+    uint64_t index = rng.uniform_range(rect.lo[0], rect.hi[0]);
+    return runtime->get_logical_subregion_by_color(upper_bound, index);
+  }
+
+protected:
+  RngStream stream;
 };
 
 template <typename T>
@@ -740,7 +761,8 @@ private:
   void select_projection(RngStream &rng, bool requires_projection) {
     projection = LEGION_MAX_APPLICATION_PROJECTION_ID;
     if (requires_projection) {
-      switch (rng.uniform_range(0, 2)) {
+      uint64_t max_id = need_disjoint() ? 2 : 3;
+      switch (rng.uniform_range(0, max_id)) {
         case 0: {
           projection = 0;  // identity projection functor
         } break;
@@ -749,6 +771,9 @@ private:
         } break;
         case 2: {
           projection = PROJECTION_OFFSET_2_ID;
+        } break;
+        case 3: {
+          projection = PROJECTION_RANDOM_DEPTH_0_ID;
         } break;
         default:
           abort();
@@ -1116,7 +1141,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
   FuzzerConfig config = FuzzerConfig::parse_args(args.argc, args.argv);
   config.log_config(runtime, ctx);
 
-  RngSeed seed(config.initial_seed);
+  RngSeed seed = std::move(root_seed);
   RngStream rng = seed.make_stream();
 
   RegionForest forest(runtime, ctx, config, seed);
@@ -1149,10 +1174,16 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 }
 
 int main(int argc, char **argv) {
+  Runtime::initialize(&argc, &argv, true /* filter */);
+  FuzzerConfig config = FuzzerConfig::parse_args(argc, argv);
+  root_seed = RngSeed(config.initial_seed);
+
   Runtime::preregister_projection_functor(PROJECTION_OFFSET_1_ID,
                                           new OffsetProjection(1));
   Runtime::preregister_projection_functor(PROJECTION_OFFSET_2_ID,
                                           new OffsetProjection(2));
+  Runtime::preregister_projection_functor(PROJECTION_RANDOM_DEPTH_0_ID,
+                                          new RandomProjection(root_seed.make_stream()));
 
   Runtime::set_top_level_task_id(TOP_LEVEL_TASK_ID);
   {

@@ -21,11 +21,29 @@
 
 #include "siphash.h"
 
+RngSeed::RngSeed() : seed(UINT64_MAX), stream(0) {}
+
 RngSeed::RngSeed(uint64_t _seed) : seed(_seed), stream(0) {}
 
 RngStream RngSeed::make_stream() {
+  if (seed == UINT64_MAX) {
+    abort();  // use of invalid RngSeed
+  }
   RngStream result(seed, stream++);
   return result;
+}
+
+RngSeed::RngSeed(RngSeed &&rng) : seed(rng.seed), stream(rng.stream) {
+  rng.seed = UINT64_MAX;
+  rng.stream = 0;
+}
+
+RngSeed &RngSeed::operator=(RngSeed &&rng) {
+  seed = rng.seed;
+  stream = rng.stream;
+  rng.seed = UINT64_MAX;
+  rng.stream = 0;
+  return *this;
 }
 
 RngStream::RngStream(uint64_t _seed, uint64_t _stream)
@@ -39,15 +57,8 @@ static void gen_bits(const uint8_t *input, size_t input_bytes, uint8_t *output,
   siphash(input, input_bytes, k, output, output_bytes);
 }
 
-uint64_t RngStream::uniform_uint64_t() {
-  const uint64_t input[3] = {seed, stream, seq++};
-  uint64_t result;
-  gen_bits(reinterpret_cast<const uint8_t *>(&input), sizeof(input),
-           reinterpret_cast<uint8_t *>(&result), sizeof(result));
-  return result;
-}
-
-uint64_t RngStream::uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */) {
+template <typename T>
+uint64_t uniform_range(T &rng, uint64_t range_lo, uint64_t range_hi /* inclusive */) {
   if (range_hi <= range_lo) {
     return range_lo;
   }
@@ -60,7 +71,31 @@ uint64_t RngStream::uniform_range(uint64_t range_lo, uint64_t range_hi /* inclus
   // loop (for small ranges), so the expected trip count is 1.
   uint64_t bits;
   do {
-    bits = uniform_uint64_t();
+    bits = rng.uniform_uint64_t();
   } while (bits >= UINT64_MAX - remainder);
   return range_lo + (bits % range_size);
+}
+
+uint64_t RngStream::uniform_uint64_t() {
+  const uint64_t input[3] = {seed, stream, seq++};
+  uint64_t result;
+  gen_bits(reinterpret_cast<const uint8_t *>(&input), sizeof(input),
+           reinterpret_cast<uint8_t *>(&result), sizeof(result));
+  return result;
+}
+
+uint64_t RngStream::uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */) {
+  return ::uniform_range(*this, range_lo, range_hi);
+}
+
+uint64_t RngChannel::uniform_uint64_t() {
+  const uint64_t input[4] = {seed, stream, channel, seq++};
+  uint64_t result;
+  gen_bits(reinterpret_cast<const uint8_t *>(&input), sizeof(input),
+           reinterpret_cast<uint8_t *>(&result), sizeof(result));
+  return result;
+}
+
+uint64_t RngChannel::uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */) {
+  return ::uniform_range(*this, range_lo, range_hi);
 }

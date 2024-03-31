@@ -2,7 +2,7 @@
 
 set -e
 
-for f in src/*.h src/*.cc; do
+for f in src/*.h src/*.cc src/*.inl; do
     clang-format -i "$f" &
 done
 black . &

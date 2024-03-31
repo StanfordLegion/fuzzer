@@ -34,7 +34,27 @@
 #include <cstdint>
 #include <type_traits>
 
-class RngSeed;
+#include "hasher.h"
+
+class RngStream;
+class RngChannel;
+
+class RngSeed {
+public:
+  RngSeed();
+  RngSeed(uint64_t seed);
+
+  RngSeed(const RngSeed &rng) = delete;
+  RngSeed(RngSeed &&rng);
+  RngSeed &operator=(const RngSeed &rng) = delete;
+  RngSeed &operator=(RngSeed &&rng);
+
+  RngStream make_stream();
+
+private:
+  uint64_t seed;
+  uint64_t stream;
+};
 
 class RngStream {
 private:
@@ -43,6 +63,9 @@ private:
 public:
   uint64_t uniform_uint64_t();
   uint64_t uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */);
+
+  template <typename T>
+  RngChannel make_channel(const T &hashable) const;
 
 private:
   const uint64_t seed;
@@ -53,15 +76,25 @@ private:
 };
 static_assert(std::is_trivially_copyable_v<RngStream>);
 
-class RngSeed {
+class RngChannel {
+private:
+  template <typename T>
+  RngChannel(uint64_t seed, uint64_t stream, const T &hashable);
+
 public:
-  RngSeed(uint64_t seed);
-  RngStream make_stream();
+  uint64_t uniform_uint64_t();
+  uint64_t uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */);
 
 private:
   const uint64_t seed;
-  uint64_t stream;
+  const uint64_t stream;
+  const uint64_t channel;
+  uint64_t seq;
+
+  friend class RngStream;
 };
-static_assert(std::is_trivially_copyable_v<RngSeed>);
+static_assert(std::is_trivially_copyable_v<RngChannel>);
+
+#include "deterministic_random.inl"
 
 #endif  // DETERMINISTIC_RANDOM_H_
