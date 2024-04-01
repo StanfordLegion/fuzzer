@@ -20,6 +20,7 @@
 
 #include "deterministic_random.h"
 #include "legion.h"
+#include "mapper.h"
 
 using namespace Legion;
 
@@ -975,14 +976,15 @@ private:
   }
 
 public:
-  void execute(Runtime *runtime, Context ctx, std::vector<FutureCheck> &futures) {
+  void execute(Runtime *runtime, Context ctx, uint64_t op_idx,
+               std::vector<FutureCheck> &futures) {
     display(runtime, ctx);
     switch (launch_type) {
       case LaunchType::SINGLE_TASK: {
-        execute_single_task(runtime, ctx, futures);
+        execute_single_task(runtime, ctx, op_idx, futures);
       } break;
       case LaunchType::INDEX_TASK: {
-        execute_index_task(runtime, ctx, futures);
+        execute_index_task(runtime, ctx, op_idx, futures);
       } break;
       default:
         abort();
@@ -1020,11 +1022,13 @@ private:
     }
   }
 
-  void execute_index_task(Runtime *runtime, Context ctx,
+  void execute_index_task(Runtime *runtime, Context ctx, uint64_t op_idx,
                           std::vector<FutureCheck> &futures) {
     PointTaskArgs args(task_arg_value);
     IndexTaskLauncher launcher(task_id, launch_domain, TaskArgument(&args, sizeof(args)),
                                ArgumentMap());
+    static_assert(sizeof(MappingTagID) == sizeof(unsigned long));
+    launcher.tag = op_idx & ULONG_MAX;
     req.add_to_index_task(launcher);
     if (elide_future_return) {
       launcher.elide_future_return = true;
@@ -1054,11 +1058,13 @@ private:
     }
   }
 
-  void execute_single_task(Runtime *runtime, Context ctx,
+  void execute_single_task(Runtime *runtime, Context ctx, uint64_t op_idx,
                            std::vector<FutureCheck> &futures) {
     for (uint64_t point = range_min; point <= range_max; ++point) {
       PointTaskArgs args(task_arg_value);
       TaskLauncher launcher(task_id, TaskArgument(&args, sizeof(args)));
+      static_assert(sizeof(MappingTagID) == sizeof(unsigned long));
+      launcher.tag = op_idx & ULONG_MAX;
       launcher.point =
           Point<1>((point - range_min + shard_offset) % range_size + range_min);
       LOG_ONCE(log_fuzz.info() << "  Task: " << point);
@@ -1156,7 +1162,7 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     // while skipping operations.
     if (op_idx >= config.skip_ops) {
       LOG_ONCE(log_fuzz.info() << "Operation: " << op_idx);
-      op.execute(runtime, ctx, futures);
+      op.execute(runtime, ctx, op_idx, futures);
     }
   }
 
@@ -1171,6 +1177,19 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
       abort();
     }
   }
+}
+
+static void create_mappers(Machine machine, Runtime *runtime,
+                           const std::set<Processor> &local_procs) {
+  for (Processor proc : local_procs) {
+    FuzzMapper *mapper =
+        new FuzzMapper(runtime->get_mapper_runtime(), machine, root_seed.make_stream());
+    runtime->replace_default_mapper(mapper, proc);
+  }
+}
+
+void add_mapper_registration_callback(RngSeed &seed) {
+  Runtime::add_registration_callback(create_mappers);
 }
 
 int main(int argc, char **argv) {
@@ -1266,6 +1285,8 @@ int main(int argc, char **argv) {
     Runtime::preregister_task_variant<uint64_t, uint64_replicable_inner>(
         registrar, "uint64_replicable_inner");
   }
+
+  Runtime::add_registration_callback(create_mappers);
 
   return Runtime::start(argc, argv);
 }
