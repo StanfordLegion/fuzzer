@@ -1028,7 +1028,7 @@ private:
     IndexTaskLauncher launcher(task_id, launch_domain, TaskArgument(&args, sizeof(args)),
                                ArgumentMap());
     static_assert(sizeof(MappingTagID) == sizeof(unsigned long));
-    launcher.tag = op_idx & ULONG_MAX;
+    launcher.tag = op_idx;
     req.add_to_index_task(launcher);
     if (elide_future_return) {
       launcher.elide_future_return = true;
@@ -1064,7 +1064,7 @@ private:
       PointTaskArgs args(task_arg_value);
       TaskLauncher launcher(task_id, TaskArgument(&args, sizeof(args)));
       static_assert(sizeof(MappingTagID) == sizeof(unsigned long));
-      launcher.tag = op_idx & ULONG_MAX;
+      launcher.tag = op_idx;
       launcher.point =
           Point<1>((point - range_min + shard_offset) % range_size + range_min);
       LOG_ONCE(log_fuzz.info() << "  Task: " << point);
@@ -1182,8 +1182,8 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 static void create_mappers(Machine machine, Runtime *runtime,
                            const std::set<Processor> &local_procs) {
   for (Processor proc : local_procs) {
-    FuzzMapper *mapper =
-        new FuzzMapper(runtime->get_mapper_runtime(), machine, root_seed.make_stream());
+    FuzzMapper::FuzzMapper *mapper = new FuzzMapper::FuzzMapper(
+        runtime->get_mapper_runtime(), machine, proc, root_seed.make_stream());
     runtime->replace_default_mapper(mapper, proc);
   }
 }

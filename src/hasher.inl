@@ -14,13 +14,9 @@
  */
 
 enum HashTypeTag {
-  INT_TYPE_ID,
-  LONG_LONG_TYPE_ID,
-  // Clang thinks this is the same as int, so we don't get to have nice things
-  // INT32_T_TYPE_ID,
+  INT32_T_TYPE_ID,
   UINT32_T_TYPE_ID,
-  // Clang thinks this is the same as long long, so we don't get to have nice things
-  // INT64_T_TYPE_ID,
+  INT64_T_TYPE_ID,
   UINT64_T_TYPE_ID,
   STD_PAIR_TYPE_ID,
   STD_VECTOR_TYPE_ID,
@@ -81,11 +77,9 @@ private:
     friend class HashTypeTagAdapter;                                                 \
   };
 
-DECLARE_TYPE_ADAPTER(int, INT_TYPE_ID)
-DECLARE_TYPE_ADAPTER(long long, LONG_LONG_TYPE_ID)
-// DECLARE_TYPE_ADAPTER(int32_t, INT32_T_TYPE_ID)
+DECLARE_TYPE_ADAPTER(int32_t, INT32_T_TYPE_ID)
 DECLARE_TYPE_ADAPTER(uint32_t, UINT32_T_TYPE_ID)
-// DECLARE_TYPE_ADAPTER(int64_t, INT64_T_TYPE_ID)
+DECLARE_TYPE_ADAPTER(int64_t, INT64_T_TYPE_ID)
 DECLARE_TYPE_ADAPTER(uint64_t, UINT64_T_TYPE_ID)
 DECLARE_TYPE_ADAPTER(Legion::DomainPoint, LEGION_DOMAIN_POINT_TYPE_ID)
 DECLARE_TYPE_ADAPTER(Legion::Domain, LEGION_DOMAIN_TYPE_ID)
@@ -128,11 +122,9 @@ private:
     friend class HashValueAdapter;                              \
   };
 
-DECLARE_SIMPLE_VALUE_ADAPTER(int)
-DECLARE_SIMPLE_VALUE_ADAPTER(long long)
-// DECLARE_SIMPLE_VALUE_ADAPTER(int32_t)
+DECLARE_SIMPLE_VALUE_ADAPTER(int32_t)
 DECLARE_SIMPLE_VALUE_ADAPTER(uint32_t)
-// DECLARE_SIMPLE_VALUE_ADAPTER(int64_t)
+DECLARE_SIMPLE_VALUE_ADAPTER(int64_t)
 DECLARE_SIMPLE_VALUE_ADAPTER(uint64_t)
 #undef DECLARE_SIMPLE_VALUE_ADAPTER
 
