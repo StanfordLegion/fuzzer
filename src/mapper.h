@@ -28,45 +28,56 @@ using namespace Legion::Mapping;
 
 class FuzzMapper : public NullMapper {
 public:
-  FuzzMapper(MapperRuntime* runtime, Machine machine, Processor local, RngStream stream);
+  FuzzMapper(MapperRuntime *runtime, Machine machine, Processor local, RngStream stream);
 
 public:
-  const char* get_mapper_name(void) const override;
+  const char *get_mapper_name(void) const override;
   MapperSyncModel get_mapper_sync_model(void) const override;
 
 public:  // Task mapping calls
-  void select_task_options(const MapperContext ctx, const Task& task,
-                           TaskOptions& output) override;
-  void replicate_task(MapperContext ctx, const Task& task,
-                      const ReplicateTaskInput& input,
-                      ReplicateTaskOutput& output) override;
-  void map_task(const MapperContext ctx, const Task& task, const MapTaskInput& input,
-                MapTaskOutput& output) override;
+  void select_task_options(const MapperContext ctx, const Task &task,
+                           TaskOptions &output) override;
+  void replicate_task(MapperContext ctx, const Task &task,
+                      const ReplicateTaskInput &input,
+                      ReplicateTaskOutput &output) override;
+  void map_task(const MapperContext ctx, const Task &task, const MapTaskInput &input,
+                MapTaskOutput &output) override;
+
+public:  // Inline mapping calls
+  void map_inline(const MapperContext ctx, const InlineMapping &inline_op,
+                  const MapInlineInput &input, MapInlineOutput &output) override;
 
 public:  // Partition mapping calls
-  void select_partition_projection(const MapperContext ctx, const Partition& partition,
-                                   const SelectPartitionProjectionInput& input,
-                                   SelectPartitionProjectionOutput& output) override;
+  void select_partition_projection(const MapperContext ctx, const Partition &partition,
+                                   const SelectPartitionProjectionInput &input,
+                                   SelectPartitionProjectionOutput &output) override;
+  void map_partition(const MapperContext ctx, const Partition &partition,
+                     const MapPartitionInput &input, MapPartitionOutput &output) override;
 
 public:  // Task execution mapping calls
-  void configure_context(const MapperContext ctx, const Task& task,
-                         ContextConfigOutput& output) override;
+  void configure_context(const MapperContext ctx, const Task &task,
+                         ContextConfigOutput &output) override;
 
 public:  // Mapping control and stealing
-  void select_tasks_to_map(const MapperContext ctx, const SelectMappingInput& input,
-                           SelectMappingOutput& output) override;
-  void select_steal_targets(const MapperContext ctx, const SelectStealingInput& input,
-                            SelectStealingOutput& output) override;
+  void select_tasks_to_map(const MapperContext ctx, const SelectMappingInput &input,
+                           SelectMappingOutput &output) override;
+  void select_steal_targets(const MapperContext ctx, const SelectStealingInput &input,
+                            SelectStealingOutput &output) override;
 
 private:
-  RngChannel make_task_channel(int mapper_call, const Task& task) const;
+  RngChannel make_task_channel(int mapper_call, const Task &task) const;
 
-  Processor random_local_proc(RngChannel& rng);
-  Processor random_global_proc(RngChannel& rng);
+  Processor random_local_proc(RngChannel &rng);
+  Processor random_global_proc(RngChannel &rng);
+
+  void random_mapping(const MapperContext ctx, RngChannel &rng,
+                      const RegionRequirement &req,
+                      std::vector<PhysicalInstance> &output);
 
 private:
   RngStream stream;
   RngChannel select_tasks_to_map_channel;
+  RngChannel map_inline_channel;
 
   Processor local_proc;
   std::vector<Processor> local_procs;

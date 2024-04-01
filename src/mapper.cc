@@ -22,14 +22,16 @@ using namespace Legion::Mapping;
 enum MapperCallIDs {
   SELECT_TASKS_TO_MAP,
   MAP_TASK,
+  MAP_INLINE,
 };
 
 static Logger log_map("fuzz_mapper");
 
-FuzzMapper::FuzzMapper(MapperRuntime* rt, Machine machine, Processor local, RngStream st)
+FuzzMapper::FuzzMapper(MapperRuntime *rt, Machine machine, Processor local, RngStream st)
     : NullMapper(rt, machine),
       stream(st),
       select_tasks_to_map_channel(st.make_channel(int32_t(SELECT_TASKS_TO_MAP))),
+      map_inline_channel(st.make_channel(int32_t(MAP_INLINE))),
       local_proc(local) {
   // TODO: something other than CPU processor
   {
@@ -45,14 +47,14 @@ FuzzMapper::FuzzMapper(MapperRuntime* rt, Machine machine, Processor local, RngS
   }
 }
 
-const char* FuzzMapper::get_mapper_name(void) const { return "fuzz_mapper"; }
+const char *FuzzMapper::get_mapper_name(void) const { return "fuzz_mapper"; }
 
 Mapper::MapperSyncModel FuzzMapper::get_mapper_sync_model(void) const {
   return SERIALIZED_REENTRANT_MAPPER_MODEL;
 }
 
-void FuzzMapper::select_task_options(const MapperContext ctx, const Task& task,
-                                     Mapper::TaskOptions& output) {
+void FuzzMapper::select_task_options(const MapperContext ctx, const Task &task,
+                                     Mapper::TaskOptions &output) {
   // output.initial_proc = local_proc; // Leave the task where it is.
   output.inline_task = false;
   output.stealable = false;
@@ -64,9 +66,9 @@ void FuzzMapper::select_task_options(const MapperContext ctx, const Task& task,
   // output.check_collective_regions.insert(...); // TODO
 }
 
-void FuzzMapper::replicate_task(MapperContext ctx, const Task& task,
-                                const ReplicateTaskInput& input,
-                                ReplicateTaskOutput& output) {
+void FuzzMapper::replicate_task(MapperContext ctx, const Task &task,
+                                const ReplicateTaskInput &input,
+                                ReplicateTaskOutput &output) {
   // TODO: cache this?
   std::vector<VariantID> variants;
   runtime->find_valid_variants(ctx, task.task_id, variants);
@@ -79,8 +81,8 @@ void FuzzMapper::replicate_task(MapperContext ctx, const Task& task,
   // TODO: actually replicate
 }
 
-void FuzzMapper::map_task(const MapperContext ctx, const Task& task,
-                          const MapTaskInput& input, MapTaskOutput& output) {
+void FuzzMapper::map_task(const MapperContext ctx, const Task &task,
+                          const MapTaskInput &input, MapTaskOutput &output) {
   RngChannel rng = make_task_channel(MAP_TASK, task);
 
   log_map.debug() << "map_task: Start";
@@ -112,103 +114,44 @@ void FuzzMapper::map_task(const MapperContext ctx, const Task& task,
     }
   } else {
     for (size_t idx = 0; idx < task.regions.size(); ++idx) {
-      const RegionRequirement& req = task.regions.at(idx);
-      if (req.privilege == LEGION_NO_ACCESS || req.privilege_fields.empty()) {
-        continue;
-      }
-
-      // Pick the memory this is going into
-      Machine::MemoryQuery query(machine);
-      query.only_kind(Memory::SYSTEM_MEM);  // FIXME: without this it selects file memory?
-      query.best_affinity_to(local_proc);
-      uint64_t target = rng.uniform_range(0, query.count() - 1);
-      auto it = query.begin();
-      std::advance(it, target);
-      Memory memory = *it;
-      log_map.debug() << "map_task: Selected memory " << memory << " kind "
-                      << memory.kind() << " for requirement " << idx;
-
-      LayoutConstraintSet constraints;
-      if (req.privilege == LEGION_REDUCE) {
-        constraints.add_constraint(
-            SpecializedConstraint(LEGION_AFFINE_REDUCTION_SPECIALIZE, req.redop));
-      } else {
-        constraints.add_constraint(SpecializedConstraint());
-      }
-
-      constraints.add_constraint(MemoryConstraint(memory.kind()));
-
-      {
-        std::vector<FieldID> fields;
-        if (rng.uniform_range(0, 1) == 0) {
-          FieldSpace handle = req.region.get_field_space();
-          runtime->get_field_space_fields(ctx, handle, fields);
-        } else {
-          fields.insert(fields.end(), req.instance_fields.begin(),
-                        req.instance_fields.end());
-        }
-        bool contiguous = rng.uniform_range(0, 1) == 0;
-        bool inorder = rng.uniform_range(0, 1) == 0;
-
-        constraints.add_constraint(FieldConstraint(fields, contiguous, inorder));
-      }
-
-      {
-        IndexSpace is = req.region.get_index_space();
-        Domain domain = runtime->get_index_space_domain(ctx, is);
-        int dim = domain.get_dim();
-        std::vector<DimensionKind> dimension_ordering(dim + 1);
-        for (int i = 0; i < dim; ++i)
-          dimension_ordering.at(i) =
-              static_cast<DimensionKind>(static_cast<int>(LEGION_DIM_X) + i);
-        dimension_ordering[dim] = LEGION_DIM_F;
-        // TODO: shuffle this ordering
-        bool contiguous = rng.uniform_range(0, 1) == 0;
-        constraints.add_constraint(OrderingConstraint(dimension_ordering, contiguous));
-      }
-
-      std::vector<LogicalRegion> regions = {req.region};
-
-      // Either force the runtime to create a fresh instance, or allow one to be reused
-      PhysicalInstance instance;
-      if (rng.uniform_range(0, 1) == 0) {
-        if (!runtime->create_physical_instance(ctx, memory, constraints, regions,
-                                               instance, true /* acquire */,
-                                               LEGION_GC_MAX_PRIORITY)) {
-          log_map.fatal() << "map_task: Failed to create instance";
-          abort();
-        }
-      } else {
-        bool created;
-        if (!runtime->find_or_create_physical_instance(
-                ctx, memory, constraints, regions, instance, created, true /* acquire */,
-                LEGION_GC_NEVER_PRIORITY)) {
-          log_map.fatal() << "map_task: Failed to create instance";
-          abort();
-        }
-      }
-      output.chosen_instances.at(idx).push_back(instance);
+      const RegionRequirement &req = task.regions.at(idx);
+      random_mapping(ctx, rng, req, output.chosen_instances.at(idx));
     }
   }
 }
 
+void FuzzMapper::map_inline(const MapperContext ctx, const InlineMapping &inline_op,
+                            const MapInlineInput &input, MapInlineOutput &output) {
+  RngChannel &rng = map_inline_channel;
+  const RegionRequirement &req = inline_op.requirement;
+  random_mapping(ctx, rng, req, output.chosen_instances);
+}
+
 void FuzzMapper::select_partition_projection(const MapperContext ctx,
-                                             const Partition& partition,
-                                             const SelectPartitionProjectionInput& input,
-                                             SelectPartitionProjectionOutput& output) {
+                                             const Partition &partition,
+                                             const SelectPartitionProjectionInput &input,
+                                             SelectPartitionProjectionOutput &output) {
   if (!input.open_complete_partitions.empty())
     output.chosen_partition = input.open_complete_partitions.at(0);
   else
     output.chosen_partition = LogicalPartition::NO_PART;
 }
 
-void FuzzMapper::configure_context(const MapperContext ctx, const Task& task,
-                                   ContextConfigOutput& output) {}
+void FuzzMapper::map_partition(const MapperContext ctx, const Partition &partition,
+                               const MapPartitionInput &input,
+                               MapPartitionOutput &output) {
+  output.chosen_instances = input.valid_instances;
+  if (!output.chosen_instances.empty())
+    runtime->acquire_and_filter_instances(ctx, output.chosen_instances);
+}
+
+void FuzzMapper::configure_context(const MapperContext ctx, const Task &task,
+                                   ContextConfigOutput &output) {}
 
 void FuzzMapper::select_tasks_to_map(const MapperContext ctx,
-                                     const SelectMappingInput& input,
-                                     SelectMappingOutput& output) {
-  RngChannel& rng = select_tasks_to_map_channel;
+                                     const SelectMappingInput &input,
+                                     SelectMappingOutput &output) {
+  RngChannel &rng = select_tasks_to_map_channel;
 
   log_map.debug() << "select_tasks_to_map: Start";
   if (input.ready_tasks.empty()) {
@@ -217,7 +160,7 @@ void FuzzMapper::select_tasks_to_map(const MapperContext ctx,
   }
 
   // Just to really mess with things, we'll pick a random task on every invokation.
-  uint64_t target = rng.uniform_range(0, input.ready_tasks.size());
+  uint64_t target = rng.uniform_range(0, input.ready_tasks.size() - 1);
   log_map.debug() << "select_tasks_to_map: Selected task " << target << " of "
                   << input.ready_tasks.size();
   auto it = input.ready_tasks.begin();
@@ -245,22 +188,99 @@ void FuzzMapper::select_tasks_to_map(const MapperContext ctx,
 }
 
 void FuzzMapper::select_steal_targets(const MapperContext ctx,
-                                      const SelectStealingInput& input,
-                                      SelectStealingOutput& output) {}
+                                      const SelectStealingInput &input,
+                                      SelectStealingOutput &output) {}
 
 RngChannel FuzzMapper::make_task_channel(int mapper_call,
-                                         const Legion::Task& task) const {
+                                         const Legion::Task &task) const {
   // TODO: index launches, mapper call ID
   static_assert(sizeof(MappingTagID) <= sizeof(uint64_t));
   return stream.make_channel(std::pair(mapper_call, uint64_t(task.tag)));
 }
 
-Processor FuzzMapper::random_local_proc(RngChannel& rng) {
+Processor FuzzMapper::random_local_proc(RngChannel &rng) {
   return local_procs.at(rng.uniform_range(0, local_procs.size() - 1));
 }
 
-Processor FuzzMapper::random_global_proc(RngChannel& rng) {
+Processor FuzzMapper::random_global_proc(RngChannel &rng) {
   return global_procs.at(rng.uniform_range(0, global_procs.size() - 1));
+}
+
+void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
+                                const RegionRequirement &req,
+                                std::vector<PhysicalInstance> &output) {
+  if (req.privilege == LEGION_NO_ACCESS || req.privilege_fields.empty()) {
+    return;
+  }
+
+  // Pick the memory this is going into
+  Machine::MemoryQuery query(machine);
+  query.has_affinity_to(local_proc);
+  query.has_capacity(1);
+  uint64_t target = rng.uniform_range(0, query.count() - 1);
+  auto it = query.begin();
+  std::advance(it, target);
+  Memory memory = *it;
+  log_map.debug() << "map_task: Selected memory " << memory << " kind " << memory.kind();
+
+  LayoutConstraintSet constraints;
+  if (req.privilege == LEGION_REDUCE) {
+    constraints.add_constraint(
+        SpecializedConstraint(LEGION_AFFINE_REDUCTION_SPECIALIZE, req.redop));
+  } else {
+    constraints.add_constraint(SpecializedConstraint());
+  }
+
+  constraints.add_constraint(MemoryConstraint(memory.kind()));
+
+  {
+    std::vector<FieldID> fields;
+    if (rng.uniform_range(0, 1) == 0) {
+      FieldSpace handle = req.region.get_field_space();
+      runtime->get_field_space_fields(ctx, handle, fields);
+    } else {
+      fields.insert(fields.end(), req.instance_fields.begin(), req.instance_fields.end());
+    }
+    bool contiguous = rng.uniform_range(0, 1) == 0;
+    bool inorder = rng.uniform_range(0, 1) == 0;
+
+    constraints.add_constraint(FieldConstraint(fields, contiguous, inorder));
+  }
+
+  {
+    IndexSpace is = req.region.get_index_space();
+    Domain domain = runtime->get_index_space_domain(ctx, is);
+    int dim = domain.get_dim();
+    std::vector<DimensionKind> dimension_ordering(dim + 1);
+    for (int i = 0; i < dim; ++i)
+      dimension_ordering.at(i) =
+          static_cast<DimensionKind>(static_cast<int>(LEGION_DIM_X) + i);
+    dimension_ordering[dim] = LEGION_DIM_F;
+    // TODO: shuffle this ordering
+    bool contiguous = rng.uniform_range(0, 1) == 0;
+    constraints.add_constraint(OrderingConstraint(dimension_ordering, contiguous));
+  }
+
+  std::vector<LogicalRegion> regions = {req.region};
+
+  // Either force the runtime to create a fresh instance, or allow one to be reused
+  PhysicalInstance instance;
+  if (rng.uniform_range(0, 1) == 0) {
+    if (!runtime->create_physical_instance(ctx, memory, constraints, regions, instance,
+                                           true /* acquire */, LEGION_GC_MAX_PRIORITY)) {
+      log_map.fatal() << "map_task: Failed to create instance";
+      abort();
+    }
+  } else {
+    bool created;
+    if (!runtime->find_or_create_physical_instance(ctx, memory, constraints, regions,
+                                                   instance, created, true /* acquire */,
+                                                   LEGION_GC_NEVER_PRIORITY)) {
+      log_map.fatal() << "map_task: Failed to create instance";
+      abort();
+    }
+  }
+  output.push_back(instance);
 }
 
 }  // namespace FuzzMapper
