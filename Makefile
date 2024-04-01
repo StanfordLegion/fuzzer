@@ -47,7 +47,7 @@ PREFIX		?= 		# Location of where to install Legion
 OUTFILE		?= fuzzer
 # List all the application source files here
 CC_SRC		?= src/siphash.c		# .c files
-CXX_SRC		?= src/fuzzer.cc src/deterministic_random.cc src/hasher.cc		# .cc files
+CXX_SRC		?= src/fuzzer.cc src/deterministic_random.cc src/hasher.cc src/mapper.cc		# .cc files
 CUDA_SRC	?=		# .cu files
 FORT_SRC	?=		# .f90 files
 HIP_SRC		?=		# .cu files
