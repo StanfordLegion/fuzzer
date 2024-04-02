@@ -84,10 +84,15 @@ private:
                       const RegionRequirement &req,
                       std::vector<PhysicalInstance> &output);
 
+  void random_sources(RngChannel &rng,
+                      const std::vector<PhysicalInstance> &source_instances,
+                      std::deque<PhysicalInstance> &chosen_ranking);
+
 private:
   RngStream stream;
   RngChannel select_tasks_to_map_channel;
   RngChannel map_inline_channel;
+  RngChannel select_inline_sources_channel;
 
   Processor local_proc;
   std::vector<Processor> local_procs;

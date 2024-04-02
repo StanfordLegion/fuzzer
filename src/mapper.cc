@@ -23,7 +23,9 @@ enum MapperCallIDs {
   SELECT_TASKS_TO_MAP,
   SLICE_TASK,
   MAP_TASK,
+  SELECT_TASK_SOURCES,
   MAP_INLINE,
+  SELECT_INLINE_SOURCES,
 };
 
 static Logger log_map("fuzz_mapper");
@@ -33,6 +35,7 @@ FuzzMapper::FuzzMapper(MapperRuntime *rt, Machine machine, Processor local, RngS
       stream(st),
       select_tasks_to_map_channel(st.make_channel(int32_t(SELECT_TASKS_TO_MAP))),
       map_inline_channel(st.make_channel(int32_t(MAP_INLINE))),
+      select_inline_sources_channel(st.make_channel(int32_t(SELECT_INLINE_SOURCES))),
       local_proc(local) {
   // TODO: something other than CPU processor
   {
@@ -141,10 +144,8 @@ void FuzzMapper::replicate_task(MapperContext ctx, const Task &task,
 void FuzzMapper::select_task_sources(const MapperContext ctx, const Task &task,
                                      const SelectTaskSrcInput &input,
                                      SelectTaskSrcOutput &output) {
-  // TODO: shuffle the source instances
-  output.chosen_ranking.insert(output.chosen_ranking.end(),
-                               input.source_instances.begin(),
-                               input.source_instances.end());
+  RngChannel rng = make_task_channel(SELECT_TASK_SOURCES, task);
+  random_sources(rng, input.source_instances, output.chosen_ranking);
 }
 
 void FuzzMapper::map_inline(const MapperContext ctx, const InlineMapping &inline_op,
@@ -158,10 +159,8 @@ void FuzzMapper::select_inline_sources(const MapperContext ctx,
                                        const InlineMapping &inline_op,
                                        const SelectInlineSrcInput &input,
                                        SelectInlineSrcOutput &output) {
-  // TODO: shuffle the source instances
-  output.chosen_ranking.insert(output.chosen_ranking.end(),
-                               input.source_instances.begin(),
-                               input.source_instances.end());
+  RngChannel &rng = select_inline_sources_channel;
+  random_sources(rng, input.source_instances, output.chosen_ranking);
 }
 
 void FuzzMapper::select_partition_projection(const MapperContext ctx,
@@ -263,9 +262,9 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
     auto it = query.begin();
     std::advance(it, target);
     memory = *it;
-    log_map.debug() << "map_task: Selected memory " << memory << " kind "
-                    << memory.kind();
   }
+  log_map.debug() << "random_mapping: Selected memory " << memory << " kind "
+                  << memory.kind();
 
   LayoutConstraintSet constraints;
   if (req.privilege == LEGION_REDUCE) {
@@ -300,7 +299,7 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
       dimension_ordering.at(i) =
           static_cast<DimensionKind>(static_cast<int>(LEGION_DIM_X) + i);
     dimension_ordering[dim] = LEGION_DIM_F;
-    // TODO: shuffle this ordering
+    rng.shuffle(dimension_ordering);
     bool contiguous = rng.uniform_range(0, 1) == 0;
     constraints.add_constraint(OrderingConstraint(dimension_ordering, contiguous));
   }
@@ -319,7 +318,7 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
   if (rng.uniform_range(0, 1) == 0) {
     if (!runtime->create_physical_instance(ctx, memory, constraints, regions, instance,
                                            true /* acquire */, LEGION_GC_MAX_PRIORITY)) {
-      log_map.fatal() << "map_task: Failed to create instance";
+      log_map.fatal() << "random_mapping: Failed to create instance";
       abort();
     }
   } else {
@@ -327,11 +326,19 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
     if (!runtime->find_or_create_physical_instance(ctx, memory, constraints, regions,
                                                    instance, created, true /* acquire */,
                                                    LEGION_GC_NEVER_PRIORITY)) {
-      log_map.fatal() << "map_task: Failed to create instance";
+      log_map.fatal() << "random_mapping: Failed to create instance";
       abort();
     }
   }
   output.push_back(instance);
+}
+
+void FuzzMapper::random_sources(RngChannel &rng,
+                                const std::vector<PhysicalInstance> &source_instances,
+                                std::deque<PhysicalInstance> &chosen_ranking) {
+  std::vector<PhysicalInstance> sources(source_instances.begin(), source_instances.end());
+  rng.shuffle(sources);
+  chosen_ranking.insert(chosen_ranking.end(), sources.begin(), sources.end());
 }
 
 }  // namespace FuzzMapper

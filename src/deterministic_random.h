@@ -63,6 +63,8 @@ private:
 public:
   uint64_t uniform_uint64_t();
   uint64_t uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */);
+  template <typename T>
+  void shuffle(std::vector<T> &vec);
 
   template <typename T>
   RngChannel make_channel(const T &hashable) const;
@@ -84,6 +86,8 @@ private:
 public:
   uint64_t uniform_uint64_t();
   uint64_t uniform_range(uint64_t range_lo, uint64_t range_hi /* inclusive */);
+  template <typename T>
+  void shuffle(std::vector<T> &vec);
 
 private:
   const uint64_t seed;
