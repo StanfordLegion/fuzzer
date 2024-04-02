@@ -14,6 +14,10 @@
  */
 
 enum HashTypeTag {
+#if defined(__GNUC__) && !defined(__clang__)
+  INT_TYPE_ID,
+  LONG_LONG_TYPE_ID,
+#endif
   INT32_T_TYPE_ID,
   UINT32_T_TYPE_ID,
   INT64_T_TYPE_ID,
@@ -77,6 +81,10 @@ private:
     friend class HashTypeTagAdapter;                                                 \
   };
 
+#if defined(__GNUC__) && !defined(__clang__)
+DECLARE_TYPE_ADAPTER(int, INT_TYPE_ID)
+DECLARE_TYPE_ADAPTER(long long, LONG_LONG_TYPE_ID)
+#endif
 DECLARE_TYPE_ADAPTER(int32_t, INT32_T_TYPE_ID)
 DECLARE_TYPE_ADAPTER(uint32_t, UINT32_T_TYPE_ID)
 DECLARE_TYPE_ADAPTER(int64_t, INT64_T_TYPE_ID)
@@ -122,6 +130,10 @@ private:
     friend class HashValueAdapter;                              \
   };
 
+#if defined(__GNUC__) && !defined(__clang__)
+DECLARE_SIMPLE_VALUE_ADAPTER(int)
+DECLARE_SIMPLE_VALUE_ADAPTER(long long)
+#endif
 DECLARE_SIMPLE_VALUE_ADAPTER(int32_t)
 DECLARE_SIMPLE_VALUE_ADAPTER(uint32_t)
 DECLARE_SIMPLE_VALUE_ADAPTER(int64_t)
