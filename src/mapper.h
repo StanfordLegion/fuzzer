@@ -37,15 +37,25 @@ public:
 public:  // Task mapping calls
   void select_task_options(const MapperContext ctx, const Task &task,
                            TaskOptions &output) override;
+  void premap_task(const MapperContext ctx, const Task &task,
+                   const PremapTaskInput &input, PremapTaskOutput &output) override;
+  void slice_task(const MapperContext ctx, const Task &task, const SliceTaskInput &input,
+                  SliceTaskOutput &output) override;
+  void map_task(const MapperContext ctx, const Task &task, const MapTaskInput &input,
+                MapTaskOutput &output) override;
   void replicate_task(MapperContext ctx, const Task &task,
                       const ReplicateTaskInput &input,
                       ReplicateTaskOutput &output) override;
-  void map_task(const MapperContext ctx, const Task &task, const MapTaskInput &input,
-                MapTaskOutput &output) override;
+  void select_task_sources(const MapperContext ctx, const Task &task,
+                           const SelectTaskSrcInput &input,
+                           SelectTaskSrcOutput &output) override;
 
 public:  // Inline mapping calls
   void map_inline(const MapperContext ctx, const InlineMapping &inline_op,
                   const MapInlineInput &input, MapInlineOutput &output) override;
+  void select_inline_sources(const MapperContext ctx, const InlineMapping &inline_op,
+                             const SelectInlineSrcInput &input,
+                             SelectInlineSrcOutput &output) override;
 
 public:  // Partition mapping calls
   void select_partition_projection(const MapperContext ctx, const Partition &partition,

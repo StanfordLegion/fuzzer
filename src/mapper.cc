@@ -21,6 +21,7 @@ using namespace Legion::Mapping;
 
 enum MapperCallIDs {
   SELECT_TASKS_TO_MAP,
+  SLICE_TASK,
   MAP_TASK,
   MAP_INLINE,
 };
@@ -61,24 +62,26 @@ void FuzzMapper::select_task_options(const MapperContext ctx, const Task &task,
   output.map_locally = false;  // TODO
   output.valid_instances = false;
   output.memoize = true;
-  output.replicate = true;
+  output.replicate = task.get_depth() == 0;  // TODO: replicate other tasks
   // output.parent_priority = ...; // Leave parent at current priority.
   // output.check_collective_regions.insert(...); // TODO
 }
 
-void FuzzMapper::replicate_task(MapperContext ctx, const Task &task,
-                                const ReplicateTaskInput &input,
-                                ReplicateTaskOutput &output) {
-  // TODO: cache this?
-  std::vector<VariantID> variants;
-  runtime->find_valid_variants(ctx, task.task_id, variants);
-  if (variants.size() != 1) {
-    log_map.fatal() << "Bad variants in replicate_task: " << variants.size()
-                    << ", expected: 1";
-    abort();
+void FuzzMapper::premap_task(const MapperContext ctx, const Task &task,
+                             const PremapTaskInput &input, PremapTaskOutput &output) {
+  // TODO: premap futures
+}
+
+void FuzzMapper::slice_task(const MapperContext ctx, const Task &task,
+                            const SliceTaskInput &input, SliceTaskOutput &output) {
+  RngChannel rng = make_task_channel(SLICE_TASK, task);
+
+  bool local = rng.uniform_range(0, 1) == 0;
+  for (Domain::DomainPointIterator it(input.domain); it; ++it) {
+    Processor proc = local ? random_local_proc(rng) : random_global_proc(rng);
+    output.slices.push_back(TaskSlice(Domain::from_domain_point(*it), proc,
+                                      false /* recurse */, false /* stealable */));
   }
-  output.chosen_variant = variants.at(0);
-  // TODO: actually replicate
 }
 
 void FuzzMapper::map_task(const MapperContext ctx, const Task &task,
@@ -120,11 +123,45 @@ void FuzzMapper::map_task(const MapperContext ctx, const Task &task,
   }
 }
 
+void FuzzMapper::replicate_task(MapperContext ctx, const Task &task,
+                                const ReplicateTaskInput &input,
+                                ReplicateTaskOutput &output) {
+  // TODO: cache this?
+  std::vector<VariantID> variants;
+  runtime->find_valid_variants(ctx, task.task_id, variants);
+  if (variants.size() != 1) {
+    log_map.fatal() << "Bad variants in replicate_task: " << variants.size()
+                    << ", expected: 1";
+    abort();
+  }
+  output.chosen_variant = variants.at(0);
+  // TODO: actually replicate
+}
+
+void FuzzMapper::select_task_sources(const MapperContext ctx, const Task &task,
+                                     const SelectTaskSrcInput &input,
+                                     SelectTaskSrcOutput &output) {
+  // TODO: shuffle the source instances
+  output.chosen_ranking.insert(output.chosen_ranking.end(),
+                               input.source_instances.begin(),
+                               input.source_instances.end());
+}
+
 void FuzzMapper::map_inline(const MapperContext ctx, const InlineMapping &inline_op,
                             const MapInlineInput &input, MapInlineOutput &output) {
   RngChannel &rng = map_inline_channel;
   const RegionRequirement &req = inline_op.requirement;
   random_mapping(ctx, rng, req, output.chosen_instances);
+}
+
+void FuzzMapper::select_inline_sources(const MapperContext ctx,
+                                       const InlineMapping &inline_op,
+                                       const SelectInlineSrcInput &input,
+                                       SelectInlineSrcOutput &output) {
+  // TODO: shuffle the source instances
+  output.chosen_ranking.insert(output.chosen_ranking.end(),
+                               input.source_instances.begin(),
+                               input.source_instances.end());
 }
 
 void FuzzMapper::select_partition_projection(const MapperContext ctx,
@@ -170,8 +207,11 @@ void FuzzMapper::select_tasks_to_map(const MapperContext ctx,
     abort();
   }
 
-  // What to do? Map it here, or send it elsewhere?
-  switch (rng.uniform_range(0, 3)) {
+  // Choose where to send the task.
+  // IMPORTANT: in order for this to be deterministic, we need to use
+  // the task channel to decide where it should go.
+  RngChannel task_rng = make_task_channel(SELECT_TASKS_TO_MAP, **it);
+  switch (task_rng.uniform_range(0, 3)) {
     case 0:
     case 1: {
       output.map_tasks.insert(*it);
