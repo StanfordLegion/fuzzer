@@ -20,12 +20,13 @@ using namespace Legion;
 using namespace Legion::Mapping;
 
 enum MapperCallIDs {
-  SELECT_TASKS_TO_MAP,
+  SELECT_TASK_OPTIONS,
   SLICE_TASK,
   MAP_TASK,
   SELECT_TASK_SOURCES,
   MAP_INLINE,
   SELECT_INLINE_SOURCES,
+  SELECT_TASKS_TO_MAP,
 };
 
 static Logger log_map("fuzz_mapper");
@@ -59,7 +60,26 @@ Mapper::MapperSyncModel FuzzMapper::get_mapper_sync_model(void) const {
 
 void FuzzMapper::select_task_options(const MapperContext ctx, const Task &task,
                                      Mapper::TaskOptions &output) {
-  // output.initial_proc = local_proc; // Leave the task where it is.
+  RngChannel rng = make_task_channel(SELECT_TASK_OPTIONS, task);
+  switch (rng.uniform_range(0, 3)) {
+    case 0:
+    case 1: {
+      log_map.debug() << "select_task_options: Staying at current proc "
+                      << output.initial_proc;
+    } break;  // Leave the task where it is.
+    case 2: {
+      output.initial_proc = random_local_proc(rng);
+      log_map.debug() << "select_task_options: Sending to local proc "
+                      << output.initial_proc;
+    } break;
+    case 3: {
+      output.initial_proc = random_global_proc(rng);
+      log_map.debug() << "select_task_options: Sending to global proc "
+                      << output.initial_proc;
+    } break;
+    default:
+      abort();
+  }
   output.inline_task = false;
   output.stealable = false;
   output.map_locally = false;  // TODO
@@ -189,7 +209,6 @@ void FuzzMapper::select_tasks_to_map(const MapperContext ctx,
                                      SelectMappingOutput &output) {
   RngChannel &rng = select_tasks_to_map_channel;
 
-  log_map.debug() << "select_tasks_to_map: Start";
   if (input.ready_tasks.empty()) {
     log_map.fatal() << "select_tasks_to_map: Empty ready list";
     abort();
@@ -202,7 +221,7 @@ void FuzzMapper::select_tasks_to_map(const MapperContext ctx,
   auto it = input.ready_tasks.begin();
   std::advance(it, target);
   if (it == input.ready_tasks.end()) {
-    log_map.fatal() << "select_tasks_to_map: Out of bounds ";
+    log_map.fatal() << "select_tasks_to_map: Out of bounds";
     abort();
   }
 
@@ -213,13 +232,18 @@ void FuzzMapper::select_tasks_to_map(const MapperContext ctx,
   switch (task_rng.uniform_range(0, 3)) {
     case 0:
     case 1: {
+      log_map.debug() << "select_tasks_to_map: Staying at current proc";
       output.map_tasks.insert(*it);
     } break;
     case 2: {
-      output.relocate_tasks[*it] = random_local_proc(rng);
+      Processor proc = random_local_proc(rng);
+      output.relocate_tasks[*it] = proc;
+      log_map.debug() << "select_tasks_to_map: Sending to local proc " << proc;
     } break;
     case 3: {
-      output.relocate_tasks[*it] = random_global_proc(rng);
+      Processor proc = random_global_proc(rng);
+      output.relocate_tasks[*it] = proc;
+      log_map.debug() << "select_tasks_to_map: Sending to global proc " << proc;
     } break;
     default:
       abort();
@@ -232,7 +256,7 @@ void FuzzMapper::select_steal_targets(const MapperContext ctx,
 
 RngChannel FuzzMapper::make_task_channel(int mapper_call,
                                          const Legion::Task &task) const {
-  // TODO: index launches, mapper call ID
+  // TODO: index launches
   static_assert(sizeof(MappingTagID) <= sizeof(uint64_t));
   return stream.make_channel(std::pair(mapper_call, uint64_t(task.tag)));
 }
@@ -339,9 +363,11 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
   log_map.debug() << "random_mapping: Region " << region;
   std::vector<LogicalRegion> regions = {region};
 
-  // Either force the runtime to create a fresh instance, or allow one to be reused
+  // Either force the runtime to create a fresh instance, or allow one to be
+  // reused. We want forced creation to be less likely because the constraints
+  // above already make a match unlikely
   PhysicalInstance instance;
-  if (rng.uniform_range(0, 1) == 0) {
+  if (rng.uniform_range(0, 3) == 0) {
     if (!runtime->create_physical_instance(ctx, memory, constraints, regions, instance,
                                            true /* acquire */, LEGION_GC_MAX_PRIORITY)) {
       log_map.fatal() << "random_mapping: Failed to create instance";

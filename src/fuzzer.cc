@@ -290,6 +290,7 @@ static void inner_task_body(const Task *task, const std::vector<PhysicalRegion> 
   Future result;
   for (size_t idx = 0; idx < task->regions.size(); ++idx) {
     TaskLauncher launcher(VOID_LEAF_TASK_ID, TaskArgument(task->args, task->arglen));
+    launcher.tag = task->tag;
     const RegionRequirement &req = task->regions[idx];
     if (req.privilege == LEGION_REDUCE) {
       launcher.add_region_requirement(RegionRequirement(req.region, req.privilege_fields,
