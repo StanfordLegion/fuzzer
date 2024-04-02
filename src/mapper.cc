@@ -254,14 +254,18 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
   }
 
   // Pick the memory this is going into
-  Machine::MemoryQuery query(machine);
-  query.has_affinity_to(local_proc);
-  query.has_capacity(1);
-  uint64_t target = rng.uniform_range(0, query.count() - 1);
-  auto it = query.begin();
-  std::advance(it, target);
-  Memory memory = *it;
-  log_map.debug() << "map_task: Selected memory " << memory << " kind " << memory.kind();
+  Memory memory;
+  {
+    Machine::MemoryQuery query(machine);
+    query.has_affinity_to(local_proc);
+    query.has_capacity(1);
+    uint64_t target = rng.uniform_range(0, query.count() - 1);
+    auto it = query.begin();
+    std::advance(it, target);
+    memory = *it;
+    log_map.debug() << "map_task: Selected memory " << memory << " kind "
+                    << memory.kind();
+  }
 
   LayoutConstraintSet constraints;
   if (req.privilege == LEGION_REDUCE) {
@@ -301,7 +305,14 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
     constraints.add_constraint(OrderingConstraint(dimension_ordering, contiguous));
   }
 
-  std::vector<LogicalRegion> regions = {req.region};
+  // Coarsen the region by a random amount by walking up the region tree
+  LogicalRegion region = req.region;
+  while (runtime->has_parent_logical_partition(ctx, region) &&
+         rng.uniform_range(0, 1) == 0) {
+    LogicalPartition parent = runtime->get_parent_logical_partition(ctx, region);
+    region = runtime->get_parent_logical_region(ctx, parent);
+  }
+  std::vector<LogicalRegion> regions = {region};
 
   // Either force the runtime to create a fresh instance, or allow one to be reused
   PhysicalInstance instance;
