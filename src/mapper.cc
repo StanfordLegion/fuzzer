@@ -263,18 +263,23 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
     std::advance(it, target);
     memory = *it;
   }
-  log_map.debug() << "random_mapping: Selected memory " << memory << " kind "
-                  << memory.kind();
+  log_map.debug() << "random_mapping: Memory " << memory << " kind " << memory.kind();
 
   LayoutConstraintSet constraints;
   if (req.privilege == LEGION_REDUCE) {
+    log_map.debug() << "random_mapping: SpecializedConstraint redop" << req.redop;
     constraints.add_constraint(
         SpecializedConstraint(LEGION_AFFINE_REDUCTION_SPECIALIZE, req.redop));
   } else {
+    log_map.debug() << "random_mapping: SpecializedConstraint affine";
     constraints.add_constraint(SpecializedConstraint());
   }
 
-  constraints.add_constraint(MemoryConstraint(memory.kind()));
+  {
+    Memory::Kind kind = memory.kind();
+    log_map.debug() << "random_mapping: MemoryConstraint kind " << kind;
+    constraints.add_constraint(MemoryConstraint(kind));
+  }
 
   {
     std::vector<FieldID> fields;
@@ -284,8 +289,18 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
     } else {
       fields.insert(fields.end(), req.instance_fields.begin(), req.instance_fields.end());
     }
+    rng.shuffle(fields);
     bool contiguous = rng.uniform_range(0, 1) == 0;
     bool inorder = rng.uniform_range(0, 1) == 0;
+
+    {
+      auto msg = log_map.debug();
+      msg << "random_mapping: FieldConstraint fields";
+      for (FieldID field : fields) {
+        msg << " " << field;
+      }
+      msg << " contiguous " << contiguous << " inorder " << inorder;
+    }
 
     constraints.add_constraint(FieldConstraint(fields, contiguous, inorder));
   }
@@ -301,6 +316,16 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
     dimension_ordering[dim] = LEGION_DIM_F;
     rng.shuffle(dimension_ordering);
     bool contiguous = rng.uniform_range(0, 1) == 0;
+
+    {
+      auto msg = log_map.debug();
+      msg << "random_mapping: OrderingConstraint dims";
+      for (DimensionKind dim : dimension_ordering) {
+        msg << " " << dim;
+      }
+      msg << " contiguous " << contiguous;
+    }
+
     constraints.add_constraint(OrderingConstraint(dimension_ordering, contiguous));
   }
 
@@ -311,6 +336,7 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
     LogicalPartition parent = runtime->get_parent_logical_partition(ctx, region);
     region = runtime->get_parent_logical_region(ctx, parent);
   }
+  log_map.debug() << "random_mapping: Region " << region;
   std::vector<LogicalRegion> regions = {region};
 
   // Either force the runtime to create a fresh instance, or allow one to be reused
