@@ -373,6 +373,7 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
       log_map.fatal() << "random_mapping: Failed to create instance";
       abort();
     }
+    log_map.debug() << "random_mapping: Created instanced (forced)";
   } else {
     bool created;
     if (!runtime->find_or_create_physical_instance(ctx, memory, constraints, regions,
@@ -381,6 +382,7 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
       log_map.fatal() << "random_mapping: Failed to create instance";
       abort();
     }
+    log_map.debug() << "random_mapping: Created instance? " << created;
   }
   output.push_back(instance);
 }
