@@ -254,11 +254,11 @@ void FuzzMapper::select_steal_targets(const MapperContext ctx,
                                       const SelectStealingInput &input,
                                       SelectStealingOutput &output) {}
 
-RngChannel FuzzMapper::make_task_channel(int mapper_call,
+RngChannel FuzzMapper::make_task_channel(int32_t mapper_call,
                                          const Legion::Task &task) const {
   // TODO: index launches
-  static_assert(sizeof(MappingTagID) <= sizeof(uint64_t));
-  return stream.make_channel(std::pair(mapper_call, uint64_t(task.tag)));
+  uint64_t tag = task.tag;
+  return stream.make_channel(std::pair(mapper_call, tag));
 }
 
 Processor FuzzMapper::random_local_proc(RngChannel &rng) {

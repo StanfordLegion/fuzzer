@@ -13,11 +13,7 @@
  * limitations under the License.
  */
 
-enum HashTypeTag {
-#if defined(__GNUC__) && !defined(__clang__)
-  INT_TYPE_ID,
-  LONG_LONG_TYPE_ID,
-#endif
+enum HashTypeIDs {
   INT32_T_TYPE_ID,
   UINT32_T_TYPE_ID,
   INT64_T_TYPE_ID,
@@ -28,191 +24,71 @@ enum HashTypeTag {
   LEGION_DOMAIN_TYPE_ID,
 };
 
-template <typename T>
-class HashTypeTagAdapter {};
-
-template <typename T>
-class HashValueAdapter {};
-
 class Hasher {
 public:
-  Hasher();
-
   template <typename T>
-  void hash(const T &value);
+  void hash(const T &value) {
+    hash_type_tag(value);
+    hash_value(value);
+  }
 
   uint64_t result();
 
 private:
-  void hash_type_tag(HashTypeTag type_tag);
-
-  template <typename T>
-  void hash_value(const T &value);
-
+  void hash_type_tag(int32_t value) { hash_raw(INT32_T_TYPE_ID); }
+  void hash_type_tag(uint32_t value) { hash_raw(UINT32_T_TYPE_ID); }
+  void hash_type_tag(int64_t value) { hash_raw(INT64_T_TYPE_ID); }
+  void hash_type_tag(uint64_t value) { hash_raw(UINT64_T_TYPE_ID); }
   template <typename T, typename U>
-  void hash_value(const std::pair<T, U> &value);
-  template <typename T>
-  void hash_value(const std::vector<T> &value);
-
-  void hash_value(const Legion::DomainPoint &value);
-  void hash_value(const Legion::Domain &value);
-
-private:
-  std::stringstream buffer;
-
-  template <typename V>
-  friend class HashTypeTagAdapter;
-
-  template <typename V>
-  friend class HashValueAdapter;
-};
-
-// The only way in C++ to avoid implicit type conversion is to use an explicit
-// constructor. The adapters below jump through the necessary hoops to make
-// sure we don't perform implicit conversions by accident.
-
-#define DECLARE_TYPE_ADAPTER(W, W_TYPE_ID)                                           \
-  template <>                                                                        \
-  class HashTypeTagAdapter<W> {                                                      \
-  private:                                                                           \
-    explicit HashTypeTagAdapter(Hasher &hasher) { hasher.hash_type_tag(W_TYPE_ID); } \
-    friend class Hasher;                                                             \
-    template <typename V>                                                            \
-    friend class HashTypeTagAdapter;                                                 \
-  };
-
-#if defined(__GNUC__) && !defined(__clang__)
-DECLARE_TYPE_ADAPTER(int, INT_TYPE_ID)
-DECLARE_TYPE_ADAPTER(long long, LONG_LONG_TYPE_ID)
-#endif
-DECLARE_TYPE_ADAPTER(int32_t, INT32_T_TYPE_ID)
-DECLARE_TYPE_ADAPTER(uint32_t, UINT32_T_TYPE_ID)
-DECLARE_TYPE_ADAPTER(int64_t, INT64_T_TYPE_ID)
-DECLARE_TYPE_ADAPTER(uint64_t, UINT64_T_TYPE_ID)
-DECLARE_TYPE_ADAPTER(Legion::DomainPoint, LEGION_DOMAIN_POINT_TYPE_ID)
-DECLARE_TYPE_ADAPTER(Legion::Domain, LEGION_DOMAIN_TYPE_ID)
-#undef DECLARE_TYPE_ADAPTER
-
-template <typename T, typename U>
-class HashTypeTagAdapter<std::pair<T, U>> {
-private:
-  explicit HashTypeTagAdapter(Hasher &hasher) {
-    hasher.hash_type_tag(STD_PAIR_TYPE_ID);
-    ::HashTypeTagAdapter<T>{hasher};
-    ::HashTypeTagAdapter<U>{hasher};
+  void hash_type_tag(const std::pair<T, U> &value) {
+    hash_raw(STD_PAIR_TYPE_ID);
+    hash_type_tag(value.first);
+    hash_type_tag(value.second);
   }
-  friend class Hasher;
-  template <typename V>
-  friend class HashTypeTagAdapter;
-};
-
-template <typename T>
-class HashTypeTagAdapter<std::vector<T>> {
-private:
-  explicit HashTypeTagAdapter(Hasher &hasher) {
-    hasher.hash_type_tag(STD_VECTOR_TYPE_ID);
-    ::HashTypeTagAdapter<T>{hasher};
+  void hash_type_tag(const Legion::DomainPoint &value) {
+    hash_raw(LEGION_DOMAIN_POINT_TYPE_ID);
   }
-  friend class Hasher;
-  template <typename V>
-  friend class HashTypeTagAdapter;
-};
+  void hash_type_tag(const Legion::Domain &value) { hash_raw(LEGION_DOMAIN_TYPE_ID); }
 
-#define DECLARE_SIMPLE_VALUE_ADAPTER(W)                         \
-  template <>                                                   \
-  class HashValueAdapter<W> {                                   \
-  private:                                                      \
-    explicit HashValueAdapter(Hasher &hasher, const W &value) { \
-      hasher.hash_value(value);                                 \
-    }                                                           \
-    friend class Hasher;                                        \
-    template <typename V>                                       \
-    friend class HashValueAdapter;                              \
-  };
-
-#if defined(__GNUC__) && !defined(__clang__)
-DECLARE_SIMPLE_VALUE_ADAPTER(int)
-DECLARE_SIMPLE_VALUE_ADAPTER(long long)
-#endif
-DECLARE_SIMPLE_VALUE_ADAPTER(int32_t)
-DECLARE_SIMPLE_VALUE_ADAPTER(uint32_t)
-DECLARE_SIMPLE_VALUE_ADAPTER(int64_t)
-DECLARE_SIMPLE_VALUE_ADAPTER(uint64_t)
-#undef DECLARE_SIMPLE_VALUE_ADAPTER
-
-template <typename T, typename U>
-class HashValueAdapter<std::pair<T, U>> {
-private:
-  explicit HashValueAdapter(Hasher &hasher, const std::pair<T, U> &value) {
-    ::HashValueAdapter<T>{hasher, value.first};
-    ::HashValueAdapter<U>{hasher, value.second};
+  void hash_value(int32_t value) { hash_raw(value); }
+  void hash_value(uint32_t value) { hash_raw(value); }
+  void hash_value(int64_t value) { hash_raw(value); }
+  void hash_value(uint64_t value) { hash_raw(value); }
+  template <typename T, typename U>
+  void hash_value(const std::pair<T, U> &value) {
+    hash_value(value.first);
+    hash_value(value.second);
   }
-  friend class Hasher;
-  template <typename V>
-  friend class HashValueAdapter;
-};
-
-template <typename T>
-class HashValueAdapter<std::vector<T>> {
-private:
-  explicit HashValueAdapter(Hasher &hasher, const std::vector<T> &value) {
-    ::HashValueAdapter{hasher, value.size()};
-    for (const T &elem : value) {
-      ::HashValueAdapter<T>{hasher, elem};
+  void hash_value(const Legion::DomainPoint &value) {
+    int32_t dim = value.get_dim();
+    hash_value(dim);
+    for (int32_t idx = 0; idx < dim; ++idx) {
+      hash_value(int64_t(value[idx]));
     }
   }
-  friend class Hasher;
-  template <typename V>
-  friend class HashValueAdapter;
-};
-
-template <>
-class HashValueAdapter<Legion::DomainPoint> {
-private:
-  explicit HashValueAdapter(Hasher &hasher, const Legion::DomainPoint &value) {
-    int dim = value.get_dim();
-    ::HashValueAdapter<int>{hasher, dim};
-    for (int idx = 0; idx < dim; ++idx) {
-      ::HashValueAdapter<Legion::coord_t>{hasher, value[idx]};
-    }
-  }
-  friend class Hasher;
-  template <typename V>
-  friend class HashValueAdapter;
-};
-
-template <>
-class HashValueAdapter<Legion::Domain> {
-private:
-  explicit HashValueAdapter(Hasher &hasher, const Legion::Domain &value) {
+  void hash_value(const Legion::Domain &value) {
     if (!value.dense()) {
       abort();
     }
-    int dim = value.get_dim();
-    ::HashValueAdapter<int>{hasher, dim};
-    for (int idx = 0; idx < dim; ++idx) {
-      ::HashValueAdapter<Legion::coord_t>{hasher, value.lo()[idx]};
-      ::HashValueAdapter<Legion::coord_t>{hasher, value.hi()[idx]};
+    int32_t dim = value.get_dim();
+    hash_value(dim);
+    for (int32_t idx = 0; idx < dim; ++idx) {
+      hash_value(int64_t(value.lo()[idx]));
+      hash_value(int64_t(value.hi()[idx]));
     }
   }
-  friend class Hasher;
-  template <typename V>
-  friend class HashValueAdapter;
+
+  template <typename T>
+  void hash_raw(const T &value) {
+    // Ensure we use this only on POD types with no padding.
+    static_assert(std::is_trivially_copyable_v<T>);
+    static_assert(std::has_unique_object_representations_v<T>);
+    buffer.write(reinterpret_cast<const char *>(&value), sizeof(value));
+  }
+
+private:
+  std::stringstream buffer;
 };
-
-template <typename T>
-void Hasher::hash(const T &value) {
-  HashTypeTagAdapter<T>{*this};
-  HashValueAdapter<T>{*this, value};
-}
-
-template <typename T>
-void Hasher::hash_value(const T &value) {
-  // Ensure we use this only on POD types with no padding.
-  static_assert(std::is_trivially_copyable_v<T>);
-  static_assert(std::has_unique_object_representations_v<T>);
-  buffer.write(reinterpret_cast<const char *>(&value), sizeof(value));
-}
 
 template <typename T>
 uint64_t hash(const T &value) {

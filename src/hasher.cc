@@ -26,12 +26,6 @@ static void hash_bytes(const uint8_t *input, size_t input_bytes, uint8_t *output
   siphash(input, input_bytes, k, output, output_bytes);
 }
 
-Hasher::Hasher() {}
-
-void Hasher::hash_type_tag(HashTypeTag type_tag) {
-  buffer.write(reinterpret_cast<const char *>(&type_tag), sizeof(type_tag));
-}
-
 uint64_t Hasher::result() {
   uint64_t result;
   std::string content = std::move(buffer).str();
