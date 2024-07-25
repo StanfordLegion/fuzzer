@@ -2,6 +2,11 @@
 
 set -e
 
+if [[ -z ${FUZZER_MACHINE} ]]; then
+    echo "Did you remember to source experiments/MY_MACHINE/env.sh? (For an appropriate value of MY_MACHINE)"
+    exit 1
+fi
+
 # Currently we give everything equal testing
 export FUZZER_TEST_COUNT=10000
 export FUZZER_OP_COUNT=1000
