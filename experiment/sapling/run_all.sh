@@ -18,7 +18,7 @@ function run_fuzzer_config {
 
     fuzzer_exe="$PWD/build_${config_name}/src/fuzzer"
 
-    FUZZER_EXE="$fuzzer_exe" sbatch --nodes 1 sbatch_fuzzer.sh
+    FUZZER_EXE="$fuzzer_exe" sbatch --nodes 1 "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
 }
 
 run_fuzzer_config debug_single
