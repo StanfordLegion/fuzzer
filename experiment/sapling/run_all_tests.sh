@@ -7,6 +7,9 @@ if [[ -z ${FUZZER_MACHINE} ]]; then
     exit 1
 fi
 
+root_dir="$(dirname "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")")"
+cd "$root_dir"
+
 # Currently we give everything equal testing
 export FUZZER_TEST_COUNT=10000
 export FUZZER_OP_COUNT=1000

@@ -7,6 +7,9 @@ if [[ -z ${FUZZER_MACHINE} ]]; then
     exit 1
 fi
 
+root_dir="$(dirname "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")")"
+cd "$root_dir"
+
 function build_legion_config {
     config_name="$1"
     cmake_build_type="$2"
