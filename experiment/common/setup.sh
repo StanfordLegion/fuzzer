@@ -13,6 +13,7 @@ cd "$root_dir"
 function build_legion_config {
     config_name="$1"
     cmake_build_type="$2"
+    extra_cmake_flags="$3"
 
     build_dir="build_${config_name}"
     install_dir="$PWD/install_${config_name}"
@@ -35,7 +36,7 @@ function build_legion_config {
             -DBUILD_MARCH= # to avoid -march=native for valgrind compatibility
         )
     fi
-    cmake "${cmake_flags[@]}" ..
+    cmake "${cmake_flags[@]}" $extra_cmake_flags ..
     make install -j${FUZZER_THREADS:-4}
     popd
 }
@@ -69,8 +70,10 @@ fi
 
 pushd legion
 build_legion_config debug_single Debug
+build_legion_config spy_single Debug -DLegion_SPY=ON
 build_legion_config release_single Release
 popd
 
 build_fuzzer_config debug_single RelWithDebInfo
+build_fuzzer_config spy_single RelWithDebInfo
 build_fuzzer_config release_single Release
