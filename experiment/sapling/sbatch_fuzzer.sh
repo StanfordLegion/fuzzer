@@ -2,7 +2,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=40
 #SBATCH --partition=all
-#SBATCH --time=03:00:00
+#SBATCH --time=04:00:00
 
 export REALM_SYNTHETIC_CORE_MAP=
 export REALM_BACKTRACE=1
