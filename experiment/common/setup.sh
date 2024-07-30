@@ -72,8 +72,12 @@ pushd legion
 build_legion_config debug_single Debug
 build_legion_config spy_single Debug -DLegion_SPY=ON
 build_legion_config release_single Release
+build_legion_config debug_multi Debug "-DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_CONDUIT -DLegion_EMBED_GASNet_CONFIGURE_ARGS=--disable-kind-cuda-uva"
+build_legion_config release_multi Release "-DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_CONDUIT -DLegion_EMBED_GASNet_CONFIGURE_ARGS=--disable-kind-cuda-uva"
 popd
 
 build_fuzzer_config debug_single RelWithDebInfo
 build_fuzzer_config spy_single RelWithDebInfo
 build_fuzzer_config release_single Release
+build_fuzzer_config debug_multi RelWithDebInfo
+build_fuzzer_config release_multi Release

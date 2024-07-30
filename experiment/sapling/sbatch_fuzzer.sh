@@ -11,4 +11,25 @@ ulimit -S -c 0 # disable core dumps
 
 set -x
 
-./runner.py --fuzzer="$FUZZER_EXE" -j${FUZZER_THREADS:-4} -n${FUZZER_TEST_COUNT:-1000} -o${FUZZER_OP_COUNT:-1000} --extra="$FUZZER_EXTRA_FLAGS" --launcher="$FUZZER_LAUNCHER"
+launcher=
+
+fuzzer_flags=(
+    --fuzzer="$FUZZER_EXE"
+    -j${FUZZER_THREADS:-4}
+    -n${FUZZER_TEST_COUNT:-1000}
+    -o${FUZZER_OP_COUNT:-1000}
+    --extra="$FUZZER_EXTRA_FLAGS"
+)
+
+if [[ $FUZZER_MODE = single ]]; then
+    launcher="$FUZZER_LAUNCHER"
+elif [[ $FUZZER_MODE = multi ]]; then
+    fuzzer_flags+=(
+        --launcher="$FUZZER_LAUNCHER"
+    )
+else
+    echo "Don't recognize fuzzer mode $FUZZER_MODE"
+    exit 1
+fi
+
+$launcher ./runner.py "${fuzzer_flags[@]}"
