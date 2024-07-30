@@ -26,7 +26,7 @@ function run_fuzzer_config {
         # We can't do as many tests in multi-node mode because SLURM has a
         # hard upper bound on the number of steps per job.
         test_count=10000
-        launcher="srun -n 2 --overlap"
+        launcher="srun -n 2 --ntasks-per-node 2 --overlap"
     else
         echo "Don't recognize fuzzer mode $mode"
         exit 1
