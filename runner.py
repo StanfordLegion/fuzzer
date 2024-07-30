@@ -37,7 +37,7 @@ def run_spy(tid, tnum, spy, logfiles, verbose):
         "--assert-warning",
     ] + logfiles
     if verbose >= 3:
-        print(f"{prefix(tid, tnum)} Running {shlex.join(cmd)}")
+        print(f"{prefix(tid, tnum)} Running {shlex.join(cmd)}", flush=True)
     proc = subprocess.run(cmd, capture_output=True)
     if proc.returncode == 0:
         return
@@ -62,7 +62,7 @@ def run_fuzzer(
     else:
         cmd.extend(["-level", "4"])
     if verbose >= 3:
-        print(f"{prefix(tid, tnum)} Running {shlex.join(cmd)}")
+        print(f"{prefix(tid, tnum)} Running {shlex.join(cmd)}", flush=True)
     try:
         proc = subprocess.run(cmd, capture_output=True)
         if proc.returncode == 0:
@@ -81,7 +81,7 @@ def run_fuzzer(
 
 def bisect_start(tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, verbose):
     if verbose >= 2:
-        print(f"{prefix(tid, tnum)} Bisecting {num_ops} ops at seed {seed}")
+        print(f"{prefix(tid, tnum)} Bisecting {num_ops} ops at seed {seed}", flush=True)
     good = num_ops
     bad = 0
     last_failure = None
@@ -89,7 +89,8 @@ def bisect_start(tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, ve
         check = (good + bad) // 2
         if verbose >= 2:
             print(
-                f"{prefix(tid, tnum)} Testing {num_ops} ops (skipping {check}) at seed {seed}"
+                f"{prefix(tid, tnum)} Testing {num_ops} ops (skipping {check}) at seed {seed}",
+                flush=True,
             )
         proc = run_fuzzer(
             tid,
@@ -113,14 +114,14 @@ def bisect_start(tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, ve
 
 def bisect_stop(tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, verbose):
     if verbose >= 2:
-        print(f"{prefix(tid, tnum)} Bisecting {num_ops} ops at seed {seed}")
+        print(f"{prefix(tid, tnum)} Bisecting {num_ops} ops at seed {seed}", flush=True)
     good = 0
     bad = num_ops
     last_failure = None
     while good + 1 < bad:
         check = (good + bad) // 2
         if verbose >= 2:
-            print(f"{prefix(tid, tnum)} Testing {check} ops at seed {seed}")
+            print(f"{prefix(tid, tnum)} Testing {check} ops at seed {seed}", flush=True)
         proc = run_fuzzer(
             tid, tnum, seed, check, extra_args, fuzzer, launcher, spy, verbose
         )
@@ -134,14 +135,16 @@ def bisect_stop(tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, ver
 
 def fuzz(tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, verbose):
     if verbose >= 2:
-        print(f"{prefix(tid, tnum)} Testing {num_ops} ops at seed {seed}")
+        print(f"{prefix(tid, tnum)} Testing {num_ops} ops at seed {seed}", flush=True)
     proc = run_fuzzer(
         tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, verbose
     )
     if proc is None:
         return
     if verbose >= 1:
-        print(f"{prefix(tid, tnum)} Found failure: {shlex.join(proc[0].args)}")
+        print(
+            f"{prefix(tid, tnum)} Found failure: {shlex.join(proc[0].args)}", flush=True
+        )
     stop, stop_proc = bisect_stop(
         tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, verbose
     )
@@ -150,7 +153,10 @@ def fuzz(tid, tnum, seed, num_ops, extra_args, fuzzer, launcher, spy, verbose):
     )
     proc = start_proc or stop_proc or proc
     if verbose >= 1:
-        print(f"{prefix(tid, tnum)} Shortest failure: {shlex.join(proc[0].args)}")
+        print(
+            f"{prefix(tid, tnum)} Shortest failure: {shlex.join(proc[0].args)}",
+            flush=True,
+        )
     return proc
 
 
@@ -169,7 +175,7 @@ def report_failure(proc):
             print(fuzz_proc.stderr.decode("utf-8"))
         else:
             print(fuzz_proc.stdout.decode("utf-8"))
-    print()
+    print(flush=True)
 
 
 def run_tests(
@@ -232,7 +238,7 @@ def run_tests(
         thread_pool.terminate()
         raise
 
-    print(f"Found {num_failed} failures")
+    print(f"Found {num_failed} failures", flush=True)
     if num_failed > 0:
         sys.exit(1)
 
