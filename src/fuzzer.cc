@@ -40,7 +40,10 @@ enum TaskIDs {
 enum ProjectionIDs {
   PROJECTION_OFFSET_1_ID = 1,
   PROJECTION_OFFSET_2_ID = 2,
+  // Important: everything above this point is injective
+  LAST_INJECTIVE_PROJECTION_ID = PROJECTION_OFFSET_2_ID,
   PROJECTION_RANDOM_DEPTH_0_ID = 3,
+  MAX_PROJECTION_ID = PROJECTION_RANDOM_DEPTH_0_ID,
 };
 
 #define LOG_ONCE(x) runtime->log_once(ctx, (x))
@@ -490,14 +493,16 @@ public:
     return runtime->get_logical_partition(root, disjoint_partitions[part_idx]);
   }
 
-  LogicalPartition select_any_partition(RngStream &rng) {
+  LogicalPartition select_any_partition(RngStream &rng, bool &is_disjoint) {
     uint64_t num_disjoint = disjoint_partitions.size();
     uint64_t num_aliased = aliased_partitions.size();
     uint64_t num_total = num_disjoint + num_aliased;
     uint64_t part_idx = rng.uniform_range(0, num_total - 1);
     if (part_idx < num_disjoint) {
+      is_disjoint = true;
       return runtime->get_logical_partition(root, disjoint_partitions[part_idx]);
     } else {
+      is_disjoint = false;
       part_idx -= num_disjoint;
       assert(part_idx < num_aliased);
       return runtime->get_logical_partition(root, aliased_partitions[part_idx]);
@@ -684,9 +689,9 @@ public:
   void build(RngStream &rng, bool launch_complete, bool requires_projection) {
     select_fields(rng);
     select_privilege(rng);
-    select_reduction(rng, launch_complete);
     select_projection(rng, requires_projection);
     select_partition(rng, requires_projection);
+    select_reduction(rng, requires_projection, launch_complete);
   }
 
 private:
@@ -723,47 +728,18 @@ private:
     }
   }
 
-  void select_reduction(RngStream &rng, bool launch_complete) {
-    redop = LEGION_REDOP_LAST;
-    if (privilege == LEGION_REDUCE) {
-      ReductionOpID last_redop;
-      bool ok = forest.get_last_redop(fields, last_redop);
-      if (ok && last_redop != LEGION_REDOP_LAST) {
-        // When we run two or more reductions back to back, we must use the
-        // same reduction operator again.
-        redop = last_redop;
-      } else if (!ok) {
-        // Two or more fields had conflicting redops, so there's no way to
-        // pick a single one across the entire set. Fall back to read-write.
-        privilege = LEGION_READ_WRITE;
-      } else {
-        // No previous reduction, we're ok to go ahead and pick.
-        redop = select_redop(rng);
-      }
-    }
-
-    // We have to be conservative here: always set the redop (if we're doing a
-    // reduction) but clear it only if the launch is complete.
-    if (redop != LEGION_REDOP_LAST) {
-      // Note: even if we got the redop through the cache, we still have to
-      // make sure all fields are covered.
-      forest.set_last_redop(fields, redop);
-    } else if (privilege != LEGION_NO_ACCESS && launch_complete) {
-      forest.set_last_redop(fields, LEGION_REDOP_LAST);
-    }
-  }
-
   bool need_disjoint() const {
     // If our privilege involves writing (read-write, write-discard, etc.),
     // then we require a disjoint region requirement (i.e. disjoint partition
-    // and disjoint projection functor).
+    // and injective projection functor).
     return (privilege & LEGION_WRITE_PRIV) != 0;
   }
 
   void select_projection(RngStream &rng, bool requires_projection) {
     projection = LEGION_MAX_APPLICATION_PROJECTION_ID;
     if (requires_projection) {
-      uint64_t max_id = need_disjoint() ? 2 : 3;
+      uint64_t max_id =
+          need_disjoint() ? LAST_INJECTIVE_PROJECTION_ID : MAX_PROJECTION_ID;
       switch (rng.uniform_range(0, max_id)) {
         case 0: {
           projection = 0;  // identity projection functor
@@ -786,8 +762,53 @@ private:
   void select_partition(RngStream &rng, bool requires_projection) {
     if (requires_projection && need_disjoint()) {
       partition = forest.select_disjoint_partition(rng);
+      partition_is_disjoint = true;
     } else {
-      partition = forest.select_any_partition(rng);
+      partition = forest.select_any_partition(rng, partition_is_disjoint);
+    }
+  }
+
+  bool is_projection_injective() const {
+    return projection <= LAST_INJECTIVE_PROJECTION_ID;
+  }
+
+  void select_reduction(RngStream &rng, bool requires_projection, bool launch_complete) {
+    redop = LEGION_REDOP_LAST;
+    if (privilege == LEGION_REDUCE) {
+      ReductionOpID last_redop;
+      bool ok = forest.get_last_redop(fields, last_redop);
+      if (ok && last_redop != LEGION_REDOP_LAST) {
+        // When we run two or more reductions back to back, we must use the
+        // same reduction operator again.
+        redop = last_redop;
+      } else if (!ok) {
+        // Two or more fields had conflicting redops, so there's no way to
+        // pick a single one across the entire set.
+        if (requires_projection &&
+            !(is_projection_injective() && partition_is_disjoint)) {
+          // We're in an index launch and the projection or partition
+          // is not disjoint. Only safe fallback is read-only.
+          privilege = LEGION_READ_ONLY;
+        } else {
+          // Fall back to read-write.
+          privilege = LEGION_READ_WRITE;
+        }
+      } else {
+        // No previous reduction, we're ok to go ahead and pick.
+        redop = select_redop(rng);
+      }
+    }
+
+    // We have to be conservative here: always set the redop (if we're doing a
+    // reduction) but clear it only if the launch is complete (on a injective
+    // projection and disjoint partition).
+    if (redop != LEGION_REDOP_LAST) {
+      // Note: even if we got the redop through the cache, we still have to
+      // make sure all fields are covered.
+      forest.set_last_redop(fields, redop);
+    } else if (privilege != LEGION_NO_ACCESS && launch_complete &&
+               is_projection_injective() && partition_is_disjoint) {
+      forest.set_last_redop(fields, LEGION_REDOP_LAST);
     }
   }
 
@@ -860,6 +881,7 @@ private:
   ReductionOpID redop = LEGION_REDOP_LAST;
   ProjectionID projection = LEGION_MAX_APPLICATION_PROJECTION_ID;
   LogicalPartition partition = LogicalPartition::NO_PART;
+  bool partition_is_disjoint = false;
 };
 
 enum class LaunchType {
