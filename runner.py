@@ -38,7 +38,7 @@ def run_spy(tid, tnum, spy, logfiles, verbose):
     ] + logfiles
     if verbose >= 3:
         print(f"{prefix(tid, tnum)} Running {shlex.join(cmd)}", flush=True)
-    proc = subprocess.run(cmd, capture_output=True)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if proc.returncode == 0:
         return
     return proc
@@ -64,7 +64,7 @@ def run_fuzzer(
     if verbose >= 3:
         print(f"{prefix(tid, tnum)} Running {shlex.join(cmd)}", flush=True)
     try:
-        proc = subprocess.run(cmd, capture_output=True)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if proc.returncode == 0:
             spy_proc = None
             if spy:
