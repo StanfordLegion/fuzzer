@@ -32,7 +32,10 @@ function run_fuzzer_config {
         exit 1
     fi
 
-    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_LAUNCHER="$launcher" sbatch --nodes 1 "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
+    # Generate a random seed so we explore a novel part of the state space.
+    seed="$(( 16#$(openssl rand -hex 4) * test_count ))"
+
+    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" sbatch --nodes 1 "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
 }
 
 run_fuzzer_config debug_single single
