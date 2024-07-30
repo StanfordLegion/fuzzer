@@ -21,7 +21,7 @@ function run_fuzzer_config {
 
     if [[ $mode = single ]]; then
         test_count=100000
-        launcher="srun -n 1 --pty"
+        launcher="srun -n 1"
     elif [[ $mode = multi ]]; then
         # We can't do as many tests in multi-node mode because SLURM has a
         # hard upper bound on the number of steps per job.
