@@ -4,6 +4,7 @@
 
 /legion
 /build
+/build_*
 /install
 
 # Generated Files
