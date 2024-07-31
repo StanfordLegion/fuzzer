@@ -20,6 +20,7 @@
 
 #include "deterministic_random.h"
 #include "legion.h"
+#include "logging_wrapper.h"
 #include "mapper.h"
 
 using namespace Legion;
@@ -51,6 +52,8 @@ enum ProjectionIDs {
 static Logger log_fuzz("fuzz");
 
 static RngSeed root_seed;
+static uint64_t replicate_levels = 0;
+static bool mapper_logging = false;
 
 static long long parse_long_long(const std::string &flag, const std::string &arg) {
   long long result;
@@ -80,8 +83,10 @@ struct FuzzerConfig {
   uint64_t region_tree_branch_factor = 4;
   uint64_t region_tree_size_factor = 4;
   uint64_t region_tree_num_fields = 4;
+  uint64_t replicate_levels = 0;
   uint64_t num_ops = 1;
   uint64_t skip_ops = 0;
+  bool mapper_logging = false;
 
   static FuzzerConfig parse_args(int argc, char **argv) {
     FuzzerConfig config;
@@ -105,12 +110,17 @@ struct FuzzerConfig {
       } else if (flag == "-fuzz:fields") {
         std::string arg(argv[++i]);
         config.region_tree_num_fields = parse_uint64_t(flag, arg);
+      } else if (flag == "-fuzz:replicate") {
+        std::string arg(argv[++i]);
+        config.replicate_levels = parse_uint64_t(flag, arg);
       } else if (flag == "-fuzz:ops") {
         std::string arg(argv[++i]);
         config.num_ops = parse_uint64_t(flag, arg);
       } else if (flag == "-fuzz:skip") {
         std::string arg(argv[++i]);
         config.skip_ops = parse_uint64_t(flag, arg);
+      } else if (flag == "-fuzz:mapper_logging") {
+        config.mapper_logging = true;
       }
     }
     return config;
@@ -127,8 +137,10 @@ struct FuzzerConfig {
                               << region_tree_size_factor);
     LOG_ONCE(log_fuzz.print() << "  config.region_tree_num_fields = "
                               << region_tree_num_fields);
+    LOG_ONCE(log_fuzz.print() << "  config.replicate_levels = " << replicate_levels);
     LOG_ONCE(log_fuzz.print() << "  config.num_ops = " << num_ops);
     LOG_ONCE(log_fuzz.print() << "  config.skip_ops = " << skip_ops);
+    LOG_ONCE(log_fuzz.print() << "  config.mapper_logging = " << mapper_logging);
   }
 };
 
@@ -1205,8 +1217,12 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
 static void create_mappers(Machine machine, Runtime *runtime,
                            const std::set<Processor> &local_procs) {
   for (Processor proc : local_procs) {
-    FuzzMapper::FuzzMapper *mapper = new FuzzMapper::FuzzMapper(
-        runtime->get_mapper_runtime(), machine, proc, root_seed.make_stream());
+    Mapping::Mapper *mapper =
+        new FuzzMapper::FuzzMapper(runtime->get_mapper_runtime(), machine, proc,
+                                   root_seed.make_stream(), replicate_levels);
+    if (mapper_logging) {
+      mapper = new Mapping::LoggingWrapper(mapper);
+    }
     runtime->replace_default_mapper(mapper, proc);
   }
 }
@@ -1219,6 +1235,8 @@ int main(int argc, char **argv) {
   Runtime::initialize(&argc, &argv, true /* filter */);
   FuzzerConfig config = FuzzerConfig::parse_args(argc, argv);
   root_seed = RngSeed(config.initial_seed);
+  replicate_levels = config.replicate_levels;
+  mapper_logging = config.mapper_logging;
 
   Runtime::preregister_projection_functor(PROJECTION_OFFSET_1_ID,
                                           new OffsetProjection(1));

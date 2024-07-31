@@ -28,7 +28,8 @@ using namespace Legion::Mapping;
 
 class FuzzMapper : public NullMapper {
 public:
-  FuzzMapper(MapperRuntime *runtime, Machine machine, Processor local, RngStream stream);
+  FuzzMapper(MapperRuntime *runtime, Machine machine, Processor local, RngStream stream,
+             uint64_t replicate);
 
 public:
   const char *get_mapper_name(void) const override;
@@ -49,6 +50,9 @@ public:  // Task mapping calls
   void select_task_sources(const MapperContext ctx, const Task &task,
                            const SelectTaskSrcInput &input,
                            SelectTaskSrcOutput &output) override;
+  void select_sharding_functor(const MapperContext ctx, const Task &task,
+                               const SelectShardingFunctorInput &input,
+                               SelectShardingFunctorOutput &output) override;
 
 public:  // Inline mapping calls
   void map_inline(const MapperContext ctx, const InlineMapping &inline_op,
@@ -97,6 +101,8 @@ private:
   Processor local_proc;
   std::vector<Processor> local_procs;
   std::vector<Processor> global_procs;
+
+  uint64_t replicate_levels;
 };
 
 }  // namespace FuzzMapper

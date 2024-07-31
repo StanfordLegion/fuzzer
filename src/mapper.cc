@@ -31,13 +31,15 @@ enum MapperCallIDs {
 
 static Logger log_map("fuzz_mapper");
 
-FuzzMapper::FuzzMapper(MapperRuntime *rt, Machine machine, Processor local, RngStream st)
+FuzzMapper::FuzzMapper(MapperRuntime *rt, Machine machine, Processor local, RngStream st,
+                       uint64_t replicate)
     : NullMapper(rt, machine),
       stream(st),
       select_tasks_to_map_channel(st.make_channel(int32_t(SELECT_TASKS_TO_MAP))),
       map_inline_channel(st.make_channel(int32_t(MAP_INLINE))),
       select_inline_sources_channel(st.make_channel(int32_t(SELECT_INLINE_SOURCES))),
-      local_proc(local) {
+      local_proc(local),
+      replicate_levels(replicate) {
   // TODO: something other than CPU processor
   {
     Machine::ProcessorQuery query(machine);
@@ -85,7 +87,7 @@ void FuzzMapper::select_task_options(const MapperContext ctx, const Task &task,
   output.map_locally = false;  // TODO
   output.valid_instances = false;
   output.memoize = true;
-  output.replicate = task.get_depth() == 0;  // TODO: replicate other tasks
+  output.replicate = task.get_depth() < static_cast<int64_t>(replicate_levels);
   // output.parent_priority = ...; // Leave parent at current priority.
   // output.check_collective_regions.insert(...); // TODO
 }
@@ -124,7 +126,11 @@ void FuzzMapper::map_task(const MapperContext ctx, const Task &task,
   log_map.debug() << "map_task: Selected variant " << output.chosen_variant;
 
   // TODO: assign to variant's correct processor kind
-  if (rng.uniform_range(0, 1) == 0) {
+  output.target_procs.clear();
+  if (input.shard_processor.exists()) {
+    log_map.debug() << "map_task: Mapping to shard proc";
+    output.target_procs.push_back(input.shard_processor);
+  } else if (rng.uniform_range(0, 1) == 0) {
     log_map.debug() << "map_task: Mapping to all local procs";
     output.target_procs.insert(output.target_procs.end(), local_procs.begin(),
                                local_procs.end());
@@ -149,6 +155,8 @@ void FuzzMapper::map_task(const MapperContext ctx, const Task &task,
 void FuzzMapper::replicate_task(MapperContext ctx, const Task &task,
                                 const ReplicateTaskInput &input,
                                 ReplicateTaskOutput &output) {
+  if (task.get_depth() >= static_cast<int64_t>(replicate_levels)) return;
+
   // TODO: cache this?
   std::vector<VariantID> variants;
   runtime->find_valid_variants(ctx, task.task_id, variants);
@@ -158,7 +166,28 @@ void FuzzMapper::replicate_task(MapperContext ctx, const Task &task,
     abort();
   }
   output.chosen_variant = variants.at(0);
-  // TODO: actually replicate
+
+  bool is_replicable =
+      runtime->is_replicable_variant(ctx, task.task_id, output.chosen_variant);
+  // For now assume we always have replicable variants at this level.
+  if (!is_replicable) {
+    log_map.fatal() << "Bad variants in replicate_task: variant is not replicable";
+    abort();
+  }
+
+  std::map<AddressSpace, Processor> targets;
+  for (Processor proc : global_procs) {
+    AddressSpace space = proc.address_space();
+    if (!targets.count(space)) {
+      targets[space] = proc;
+    }
+  }
+
+  if (targets.size() > 1) {
+    for (auto &target : targets) {
+      output.target_processors.push_back(target.second);
+    }
+  }
 }
 
 void FuzzMapper::select_task_sources(const MapperContext ctx, const Task &task,
@@ -166,6 +195,13 @@ void FuzzMapper::select_task_sources(const MapperContext ctx, const Task &task,
                                      SelectTaskSrcOutput &output) {
   RngChannel rng = make_task_channel(SELECT_TASK_SOURCES, task);
   random_sources(rng, input.source_instances, output.chosen_ranking);
+}
+
+void FuzzMapper::select_sharding_functor(const MapperContext ctx, const Task &task,
+                                         const SelectShardingFunctorInput &input,
+                                         SelectShardingFunctorOutput &output) {
+  // TODO: customize the sharding functor
+  output.chosen_functor = 0;
 }
 
 void FuzzMapper::map_inline(const MapperContext ctx, const InlineMapping &inline_op,
