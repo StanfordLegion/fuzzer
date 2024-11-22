@@ -1,5 +1,7 @@
 #!/bin/bash
 
+branch="$1"
+
 set -e
 
 if [[ -z ${FUZZER_MACHINE} ]]; then
@@ -65,7 +67,11 @@ function build_fuzzer_config {
 }
 
 if [[ ! -e legion ]]; then
-    git clone https://gitlab.com/StanfordLegion/legion.git
+    clone_flags=()
+    if [[ -n $branch ]]; then
+        clone_flags+=(-b "$branch")
+    fi
+    git clone "${clone_flags[@]}" https://gitlab.com/StanfordLegion/legion.git
 fi
 
 pushd legion
