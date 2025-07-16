@@ -8,6 +8,9 @@ include(GNUInstallDirs)
 
 set(FUZZER_TEST_LAUNCHER "" CACHE STRING "launcher for test commands")
 
+# Legion requires applications not be built with -DNDEBUG in debug mode:
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g")
+
 enable_testing()
 
 add_subdirectory(src)
