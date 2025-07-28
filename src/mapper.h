@@ -79,7 +79,8 @@ public:  // Mapping control and stealing
                             SelectStealingOutput &output) override;
 
 private:
-  RngChannel make_task_channel(int mapper_call, const Task &task) const;
+  RngChannel make_task_channel(int32_t mapper_call, const Task &task,
+                               uint64_t salt = 0) const;
 
   Processor random_local_proc(RngChannel &rng);
   Processor random_global_proc(RngChannel &rng);

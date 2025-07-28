@@ -262,9 +262,23 @@ void FuzzMapper::select_tasks_to_map(const MapperContext ctx,
   }
 
   // Choose where to send the task.
-  // IMPORTANT: in order for this to be deterministic, we need to use
-  // the task channel to decide where it should go.
-  RngChannel task_rng = make_task_channel(SELECT_TASKS_TO_MAP, **it);
+
+  // IMPORTANT: in order for this to be deterministic, we need to use the task
+  // channel to decide where it should go. This further has to take into
+  // account the number of hops the task has taken so far (otherwise we get the
+  // same random number over and over).
+
+  const Legion::Task &task = **it;
+  uint64_t hops = 0;
+  if (task.mapper_data_size == sizeof(uint64_t)) {
+    hops = *reinterpret_cast<uint64_t *>(task.mapper_data);
+  }
+  {
+    uint64_t new_hops = hops + 1;
+    runtime->update_mappable_data(ctx, task, &new_hops, sizeof(new_hops));
+  }
+
+  RngChannel task_rng = make_task_channel(SELECT_TASKS_TO_MAP, task, hops);
   switch (task_rng.uniform_range(0, 3)) {
     case 0:
     case 1: {
@@ -290,11 +304,11 @@ void FuzzMapper::select_steal_targets(const MapperContext ctx,
                                       const SelectStealingInput &input,
                                       SelectStealingOutput &output) {}
 
-RngChannel FuzzMapper::make_task_channel(int32_t mapper_call,
-                                         const Legion::Task &task) const {
+RngChannel FuzzMapper::make_task_channel(int32_t mapper_call, const Legion::Task &task,
+                                         uint64_t salt) const {
   // TODO: index launches
-  uint64_t tag = task.tag;
-  return stream.make_channel(std::pair(mapper_call, tag));
+  std::tuple<int32_t, uint64_t, uint64_t> channel(mapper_call, task.tag, salt);
+  return stream.make_channel(channel);
 }
 
 Processor FuzzMapper::random_local_proc(RngChannel &rng) {

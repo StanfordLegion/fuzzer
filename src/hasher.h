@@ -18,6 +18,8 @@
 
 #include <cstdint>
 #include <sstream>
+#include <tuple>
+#include <utility>
 
 #include "legion.h"
 

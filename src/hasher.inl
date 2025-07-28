@@ -19,6 +19,7 @@ enum HashTypeIDs {
   INT64_T_TYPE_ID,
   UINT64_T_TYPE_ID,
   STD_PAIR_TYPE_ID,
+  STD_TUPLE_TYPE_ID,
   LEGION_DOMAIN_POINT_TYPE_ID,
   LEGION_DOMAIN_TYPE_ID,
 };
@@ -44,6 +45,15 @@ private:
     hash_type_tag(value.first);
     hash_type_tag(value.second);
   }
+  template <typename T, typename U, typename V>
+  void hash_type_tag(const std::tuple<T, U, V> &value) {
+    hash_raw(STD_TUPLE_TYPE_ID);
+    size_t size = std::tuple_size<std::tuple<T, U, V>>{};
+    hash_raw(size);
+    hash_type_tag(std::get<0>(value));
+    hash_type_tag(std::get<1>(value));
+    hash_type_tag(std::get<2>(value));
+  }
   void hash_type_tag(const Legion::DomainPoint &value) {
     hash_raw(LEGION_DOMAIN_POINT_TYPE_ID);
   }
@@ -57,6 +67,12 @@ private:
   void hash_value(const std::pair<T, U> &value) {
     hash_value(value.first);
     hash_value(value.second);
+  }
+  template <typename T, typename U, typename V>
+  void hash_value(const std::tuple<T, U, V> &value) {
+    hash_value(std::get<0>(value));
+    hash_value(std::get<1>(value));
+    hash_value(std::get<2>(value));
   }
   void hash_value(const Legion::DomainPoint &value) {
     int32_t dim = value.get_dim();
