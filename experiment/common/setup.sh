@@ -38,7 +38,7 @@ function build_legion_config {
             -DBUILD_MARCH= # to avoid -march=native for valgrind compatibility
         )
     fi
-    cmake "${cmake_flags[@]}" $extra_cmake_flags ..
+    (set -x; cmake "${cmake_flags[@]}" $extra_cmake_flags ..)
     make install -j${FUZZER_THREADS:-4}
     popd
 }
@@ -61,7 +61,7 @@ function build_fuzzer_config {
         -DCMAKE_PREFIX_PATH="$legion_install_dir"
         -DCMAKE_CXX_FLAGS="-Wall -Werror"
     )
-    cmake "${cmake_flags[@]}" ..
+    (set -x; cmake "${cmake_flags[@]}" ..)
     make -j${FUZZER_THREADS:-4}
     popd
 }
