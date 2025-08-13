@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <set>
@@ -383,6 +384,7 @@ void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regi
   PhysicalRegion pr = regions[0];
   std::vector<FieldID> fields;
   pr.get_fields(fields);
+  std::sort(fields.begin(), fields.end());
 
   DomainT<1> domain = runtime->get_index_space_domain(
       ctx, IndexSpaceT<1>(pr.get_logical_region().get_index_space()));
