@@ -15,7 +15,8 @@ export FUZZER_OP_COUNT=1000
 function run_fuzzer_config {
     config_name="$1"
     mode="$2"
-    extra_flags="$3"
+    partition="$3"
+    extra_flags="$4"
 
     fuzzer_exe="$PWD/build_${config_name}/src/fuzzer"
     fuzzer_flags="-ll:util 2 -ll:cpu 3 $extra_flags"
@@ -33,15 +34,20 @@ function run_fuzzer_config {
         exit 1
     fi
 
+    if [[ $partition = gpu ]]; then
+        gpus_per_task=1
+        gpus_per_node=4
+    fi
+
     # Generate a random seed so we explore a novel part of the state space.
     seed="$(( 16#$(openssl rand -hex 4) * test_count ))"
 
-    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_EXTRA_FLAGS="$fuzzer_flags" sbatch --nodes 1 "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
+    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_GPUS_PER_TASK="$gpus_per_task" FUZZER_GPUS_PER_NODE="$gpus_per_node" FUZZER_EXTRA_FLAGS="$fuzzer_flags" sbatch --nodes 1 --partition=$partition "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
 }
 
-run_fuzzer_config debug_single single
-run_fuzzer_config release_single single
-run_fuzzer_config debug_multi multi
-run_fuzzer_config release_multi multi
-run_fuzzer_config debug_multi multi "-fuzz:replicate 1"
-run_fuzzer_config release_multi multi "-fuzz:replicate 1"
+run_fuzzer_config debug_single single cpu
+run_fuzzer_config release_single single cpu
+run_fuzzer_config debug_multi multi gpu
+run_fuzzer_config release_multi multi gpu
+run_fuzzer_config debug_multi multi gpu "-fuzz:replicate 1"
+run_fuzzer_config release_multi multi gpu "-fuzz:replicate 1"

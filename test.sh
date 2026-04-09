@@ -6,6 +6,7 @@ set -x
 FUZZER_INSTALL_DEPS=${FUZZER_INSTALL_DEPS:-0}
 FUZZER_INSTALL_LEGION=${FUZZER_INSTALL_LEGION:-1}
 FUZZER_DEBUG=${FUZZER_DEBUG:-1}
+FUZZER_USE_CUDA=${FUZZER_USE_CUDA:-0}
 FUZZER_THREADS=${FUZZER_THREADS:-4}
 
 if [[ $FUZZER_INSTALL_DEPS -eq 1 ]]; then
@@ -35,6 +36,11 @@ if [[ $FUZZER_INSTALL_LEGION -eq 1 ]]; then
                 -DBUILD_MARCH= # to avoid -march=native for valgrind compatibility
             )
         fi
+        if [[ $FUZZER_USE_CUDA -eq 1 ]]; then
+            legion_flags+=(
+                -DLegion_USE_CUDA=ON
+            )
+        fi
         if [[ -n $FUZZER_LEGION_NETWORKS ]]; then
             legion_flags+=(
                 -DLegion_NETWORKS=$FUZZER_LEGION_NETWORKS
@@ -54,9 +60,19 @@ fuzzer_flags=(
     -DCMAKE_PREFIX_PATH=$PWD/../legion/install
     -DCMAKE_CXX_FLAGS="-Wall -Werror"
 )
+runner_flags=()
 if [[ -n $FUZZER_LEGION_NETWORKS ]]; then
     fuzzer_flags+=(
         -DFUZZER_TEST_LAUNCHER="mpirun;-n;2"
+    )
+fi
+if [[ $FUZZER_USE_CUDA -eq 1 ]]; then
+    fuzzer_flags+=(
+        -DFUZZER_TEST_ARGS="-ll:gpu;1"
+    )
+    runner_flags+=(
+        "--gpus-per-task=1"
+        "--gpus-per-node=$(nvidia-smi -L | wc -l)"
     )
 fi
 cmake "${fuzzer_flags[@]}" ..
@@ -64,4 +80,4 @@ make -j${FUZZER_THREADS:-4}
 popd
 
 export REALM_SYNTHETIC_CORE_MAP=
-./runner.py --fuzzer=$PWD/build/src/fuzzer -j${FUZZER_THREADS:-4} -n1000
+./runner.py --fuzzer=$PWD/build/src/fuzzer -j${FUZZER_THREADS:-4} -n1000 "${runner_flags[@]}"
