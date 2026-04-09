@@ -5,7 +5,7 @@ set -e
 for f in src/*.h src/*.cc src/*.inl; do
     clang-format -i "$f" &
 done
-black . &
+ruff format . &
 wait
 
 if [[ $CHECK_FORMAT -eq 1 ]]; then
