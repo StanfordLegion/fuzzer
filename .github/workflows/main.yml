@@ -10,7 +10,7 @@ jobs:
     name: Format
     runs-on: 'ubuntu-24.04'
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v6
       - run: CHECK_FORMAT=1 ./format.sh
 
   legion:
@@ -21,7 +21,7 @@ jobs:
         os: ['ubuntu-24.04', 'macos-15-intel', 'macos-15']
         debug: ['1', '0']
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v6
       - run: ./test.sh
         env:
           FUZZER_DEBUG: ${{ matrix.debug }}
