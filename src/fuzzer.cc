@@ -193,7 +193,7 @@ const T unpack_args(const Task *task) {
                      << ", expected: " << sizeof(T);
     abort();
   }
-  const T result = *reinterpret_cast<T *>(task->args);
+  const T result = *reinterpret_cast<const T *>(task->args);
   return result;
 }
 
