@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=40
-#SBATCH --partition=all
 #SBATCH --time=04:00:00
 
 export REALM_SYNTHETIC_CORE_MAP=
@@ -31,6 +30,17 @@ elif [[ $FUZZER_MODE = multi ]]; then
 else
     echo "Don't recognize fuzzer mode $FUZZER_MODE"
     exit 1
+fi
+
+if [[ -n $FUZZER_GPUS_PER_TASK ]]; then
+    fuzzer_flags+=(
+        --gpus-per-task=$FUZZER_GPUS_PER_TASK
+    )
+fi
+if [[ -n $FUZZER_GPUS_PER_NODE ]]; then
+    fuzzer_flags+=(
+        --gpus-per-node=$FUZZER_GPUS_PER_NODE
+    )
 fi
 
 $launcher ./runner.py "${fuzzer_flags[@]}"

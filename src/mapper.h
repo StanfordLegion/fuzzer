@@ -86,7 +86,7 @@ private:
   Processor random_global_proc(RngChannel &rng);
 
   void random_mapping(const MapperContext ctx, RngChannel &rng,
-                      const RegionRequirement &req,
+                      const RegionRequirement &req, Processor target_proc,
                       std::vector<PhysicalInstance> &output);
 
   void random_sources(RngChannel &rng,
@@ -102,6 +102,8 @@ private:
   Processor local_proc;
   std::vector<Processor> local_procs;
   std::vector<Processor> global_procs;
+  std::vector<Processor> local_gpu_procs;
+  std::vector<Processor> global_gpu_procs;
 
   uint64_t replicate_levels;
 };

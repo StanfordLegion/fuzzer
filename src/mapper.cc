@@ -23,6 +23,7 @@ enum MapperCallIDs {
   SELECT_TASK_OPTIONS,
   SLICE_TASK,
   MAP_TASK,
+  REPLICATE_TASK,
   SELECT_TASK_SOURCES,
   MAP_INLINE,
   SELECT_INLINE_SOURCES,
@@ -40,7 +41,6 @@ FuzzMapper::FuzzMapper(MapperRuntime *rt, Machine machine, Processor local, RngS
       select_inline_sources_channel(st.make_channel(int32_t(SELECT_INLINE_SOURCES))),
       local_proc(local),
       replicate_levels(replicate) {
-  // TODO: something other than CPU processor
   {
     Machine::ProcessorQuery query(machine);
     query.only_kind(Processor::LOC_PROC);
@@ -51,6 +51,17 @@ FuzzMapper::FuzzMapper(MapperRuntime *rt, Machine machine, Processor local, RngS
     Machine::ProcessorQuery query(machine);
     query.only_kind(Processor::LOC_PROC);
     global_procs.insert(global_procs.end(), query.begin(), query.end());
+  }
+  {
+    Machine::ProcessorQuery query(machine);
+    query.only_kind(Processor::TOC_PROC);
+    query.local_address_space();
+    local_gpu_procs.insert(local_gpu_procs.end(), query.begin(), query.end());
+  }
+  {
+    Machine::ProcessorQuery query(machine);
+    query.only_kind(Processor::TOC_PROC);
+    global_gpu_procs.insert(global_gpu_procs.end(), query.begin(), query.end());
   }
 }
 
@@ -115,21 +126,39 @@ void FuzzMapper::map_task(const MapperContext ctx, const Task &task,
 
   log_map.debug() << "map_task: Start";
 
-  // TODO: cache this?
-  std::vector<VariantID> variants;
-  runtime->find_valid_variants(ctx, task.task_id, variants);
-  if (variants.size() != 1) {
-    log_map.fatal() << "Bad variants in map_task: " << variants.size() << ", expected: 1";
-    abort();
+  // Collect variants by processor kind (for processors that exist).
+  std::vector<VariantID> cpu_variants;
+  runtime->find_valid_variants(ctx, task.task_id, cpu_variants, Processor::LOC_PROC);
+  std::vector<VariantID> gpu_variants;
+  if (!local_gpu_procs.empty()) {
+    runtime->find_valid_variants(ctx, task.task_id, gpu_variants, Processor::TOC_PROC);
   }
-  output.chosen_variant = variants.at(0);
+
+  // Build a combined list of all usable variants and pick one randomly.
+  std::vector<VariantID> variants;
+  variants.insert(variants.end(), cpu_variants.begin(), cpu_variants.end());
+  variants.insert(variants.end(), gpu_variants.begin(), gpu_variants.end());
+  assert(!variants.empty());
+  output.chosen_variant = variants.at(rng.uniform_range(0, variants.size() - 1));
   log_map.debug() << "map_task: Selected variant " << output.chosen_variant;
 
-  // TODO: assign to variant's correct processor kind
+  // Determine if the chosen variant is a GPU variant.
+  bool is_gpu_variant = std::find(gpu_variants.begin(), gpu_variants.end(),
+                                  output.chosen_variant) != gpu_variants.end();
+  log_map.debug() << "map_task: Variant is GPU: " << is_gpu_variant;
+
+  // Select target processors from the correct pool.
   output.target_procs.clear();
   if (input.shard_processor.exists()) {
     log_map.debug() << "map_task: Mapping to shard proc";
     output.target_procs.push_back(input.shard_processor);
+  } else if (is_gpu_variant) {
+    // Because GPUs have different memory visibility, we need to pick
+    // the specific GPU to map to (not a processor group).
+    Processor gpu_proc =
+        local_gpu_procs.at(rng.uniform_range(0, local_gpu_procs.size() - 1));
+    log_map.debug() << "map_task: Mapping to GPU proc " << gpu_proc;
+    output.target_procs.push_back(gpu_proc);
   } else if (rng.uniform_range(0, 1) == 0) {
     log_map.debug() << "map_task: Mapping to all local procs";
     output.target_procs.insert(output.target_procs.end(), local_procs.begin(),
@@ -147,7 +176,8 @@ void FuzzMapper::map_task(const MapperContext ctx, const Task &task,
   } else {
     for (size_t idx = 0; idx < task.regions.size(); ++idx) {
       const RegionRequirement &req = task.regions.at(idx);
-      random_mapping(ctx, rng, req, output.chosen_instances.at(idx));
+      random_mapping(ctx, rng, req, output.target_procs.front(),
+                     output.chosen_instances.at(idx));
     }
   }
 }
@@ -157,15 +187,23 @@ void FuzzMapper::replicate_task(MapperContext ctx, const Task &task,
                                 ReplicateTaskOutput &output) {
   if (task.get_depth() >= static_cast<int64_t>(replicate_levels)) return;
 
-  // TODO: cache this?
-  std::vector<VariantID> variants;
-  runtime->find_valid_variants(ctx, task.task_id, variants);
-  if (variants.size() != 1) {
-    log_map.fatal() << "Bad variants in replicate_task: " << variants.size()
-                    << ", expected: 1";
-    abort();
+  RngChannel rng = make_task_channel(REPLICATE_TASK, task);
+
+  // Collect variants by processor kind (for processors that exist).
+  std::vector<VariantID> cpu_variants;
+  runtime->find_valid_variants(ctx, task.task_id, cpu_variants, Processor::LOC_PROC);
+  std::vector<VariantID> gpu_variants;
+  if (!local_gpu_procs.empty()) {
+    runtime->find_valid_variants(ctx, task.task_id, gpu_variants, Processor::TOC_PROC);
   }
-  output.chosen_variant = variants.at(0);
+
+  // Build a combined list of all usable variants and pick one randomly.
+  std::vector<VariantID> variants;
+  variants.insert(variants.end(), cpu_variants.begin(), cpu_variants.end());
+  variants.insert(variants.end(), gpu_variants.begin(), gpu_variants.end());
+  assert(!variants.empty());
+  output.chosen_variant = variants.at(rng.uniform_range(0, variants.size() - 1));
+  log_map.debug() << "replicate_task: Selected variant " << output.chosen_variant;
 
   bool is_replicable =
       runtime->is_replicable_variant(ctx, task.task_id, output.chosen_variant);
@@ -208,7 +246,7 @@ void FuzzMapper::map_inline(const MapperContext ctx, const InlineMapping &inline
                             const MapInlineInput &input, MapInlineOutput &output) {
   RngChannel &rng = map_inline_channel;
   const RegionRequirement &req = inline_op.requirement;
-  random_mapping(ctx, rng, req, output.chosen_instances);
+  random_mapping(ctx, rng, req, local_proc, output.chosen_instances);
 }
 
 void FuzzMapper::select_inline_sources(const MapperContext ctx,
@@ -320,7 +358,7 @@ Processor FuzzMapper::random_global_proc(RngChannel &rng) {
 }
 
 void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
-                                const RegionRequirement &req,
+                                const RegionRequirement &req, Processor target_proc,
                                 std::vector<PhysicalInstance> &output) {
   if (req.privilege == LEGION_NO_ACCESS || req.privilege_fields.empty()) {
     return;
@@ -330,7 +368,7 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
   Memory memory;
   {
     Machine::MemoryQuery query(machine);
-    query.has_affinity_to(local_proc);
+    query.has_affinity_to(target_proc);
     query.has_capacity(1);
     uint64_t target = rng.uniform_range(0, query.count() - 1);
     auto it = query.begin();
