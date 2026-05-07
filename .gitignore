@@ -2,7 +2,11 @@
 *~
 \#*#
 
+/deps
 /legion
+/ucx
+/ucc
+
 /build
 /build_*
 /install
