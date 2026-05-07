@@ -39,9 +39,13 @@ function run_fuzzer_config {
     FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_EXTRA_FLAGS="$fuzzer_flags" sbatch --nodes 1 "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
 }
 
-run_fuzzer_config debug_single single
-run_fuzzer_config release_single single
-run_fuzzer_config debug_multi multi
-run_fuzzer_config release_multi multi
-run_fuzzer_config debug_multi multi "-fuzz:replicate 1"
-run_fuzzer_config release_multi multi "-fuzz:replicate 1"
+run_fuzzer_config      debug_single single
+run_fuzzer_config    release_single single
+run_fuzzer_config   debug_multi_gex  multi
+run_fuzzer_config release_multi_gex  multi
+run_fuzzer_config   debug_multi_gex  multi "-fuzz:replicate 1"
+run_fuzzer_config release_multi_gex  multi "-fuzz:replicate 1"
+run_fuzzer_config   debug_multi_ucx  multi
+run_fuzzer_config release_multi_ucx  multi
+run_fuzzer_config   debug_multi_ucx  multi "-fuzz:replicate 1"
+run_fuzzer_config release_multi_ucx  multi "-fuzz:replicate 1"
