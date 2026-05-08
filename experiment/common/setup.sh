@@ -27,16 +27,17 @@ function build_ucx {
         echo "$UCX_SHA256  $DEP_CACHE/ucx-$UCX_VERSION.tar.gz" | shasum -a 256 -c
     fi
     tar --strip-components=1 -zxf "$DEP_CACHE"/ucx-$UCX_VERSION.tar.gz
+    configure_flags=()
     if [[ -n $FUZZER_CUDA ]]; then
-        UCX_CONFIG_OPTS="--with-cuda=$FUZZER_CUDA"
-        # CI tests are run on a single node. So disable shared-memory and cuda ipc
-        # transports to be able to test some network functionality.
-        export UCX_TLS=^sm,cuda_ipc
+        configure_flags+=(
+            --with-cuda="$FUZZER_CUDA"
+        )
     else
-        UCX_CONFIG_OPTS="--without-cuda"
-        export UCX_TLS=^sm
+        configure_flags+=(
+            --without-cuda
+        )
     fi
-    contrib/configure-release-mt --prefix="$PWD/install" $UCX_CONFIG_OPTS
+    contrib/configure-release-mt --prefix="$PWD/install" "${configure_flags[@]}"
     make -j${FUZZER_THREADS:-4} install
     popd
 }
