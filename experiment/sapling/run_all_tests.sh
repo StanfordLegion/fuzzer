@@ -33,10 +33,16 @@ function run_fuzzer_config {
         exit 1
     fi
 
+    bootstrap_dir=
+    if [[ $config_name = *ucx ]]; then
+        # UCX requires a boostrap .so file so figure out where that's located
+        bootstrap_dir="$PWD/legion/install_${config_name}/lib"
+    fi
+
     # Generate a random seed so we explore a novel part of the state space.
     seed="$(( 16#$(openssl rand -hex 4) * test_count ))"
 
-    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_EXTRA_FLAGS="$fuzzer_flags" sbatch --nodes 1 "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
+    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_EXTRA_FLAGS="$fuzzer_flags" FUZZER_BOOTSTRAP_DIR="$bootstrap_dir" sbatch --nodes 1 "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
 }
 
 run_fuzzer_config      debug_single single

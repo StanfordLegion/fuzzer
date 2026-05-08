@@ -34,4 +34,8 @@ else
     exit 1
 fi
 
+if [[ -n $FUZZER_BOOTSTRAP_DIR ]]; then
+    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$FUZZER_BOOTSTRAP_DIR"
+fi
+
 $launcher ./runner.py "${fuzzer_flags[@]}"
