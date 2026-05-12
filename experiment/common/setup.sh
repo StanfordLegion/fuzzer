@@ -82,6 +82,8 @@ function build_legion_config {
         -DCMAKE_INSTALL_PREFIX="$install_dir"
         -DCMAKE_CXX_STANDARD=17
         -DCMAKE_CXX_FLAGS_DEBUG='-g -O2' # improve performance of debug code
+        # reduce IBV max medium to trip payload limit
+        -DLegion_EMBED_GASNet_CONFIGURE_ARGS="--disable-kind-cuda-uva --with-ibv-max-medium=1024 --disable-pshm"
     )
     if [[ $cmake_build_type = Debug ]]; then
         cmake_flags+=(
@@ -142,8 +144,8 @@ build_legion_config debug_single Debug
 build_legion_config spy_single Debug -DLegion_SPY=ON
 build_legion_config release_single Release
 if echo $FUZZER_NETWORKS | grep -q -w gasnetex; then
-    build_legion_config debug_multi_gex Debug "-DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT -DLegion_EMBED_GASNet_CONFIGURE_ARGS=--disable-kind-cuda-uva"
-    build_legion_config release_multi_gex Release "-DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT -DLegion_EMBED_GASNet_CONFIGURE_ARGS=--disable-kind-cuda-uva"
+    build_legion_config debug_multi_gex Debug "-DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT"
+    build_legion_config release_multi_gex Release "-DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT"
 fi
 if echo $FUZZER_NETWORKS | grep -q -w ucx; then
     build_legion_config debug_multi_ucx Debug "-DLegion_NETWORKS=ucx -DCMAKE_INSTALL_RPATH=$ucx_ROOT/lib;$ucc_ROOT/lib"
