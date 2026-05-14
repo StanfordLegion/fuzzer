@@ -546,7 +546,7 @@ public:
     return true;
   }
 
-  void verify_contents() {
+  bool verify_contents() {
     std::vector<FieldID> fields;
     shadow_inst.get_fields(fields);
 
@@ -570,14 +570,16 @@ public:
           shadow_acc(shadow_inst, field);
       for (Domain::DomainPointIterator it(dom); it; ++it) {
         if (acc[*it] != shadow_acc[*it]) {
-          log_fuzz.fatal() << "Bad region value: " << acc[*it]
+          log_fuzz.error() << "Bad region value: " << acc[*it]
                            << ", expected: " << shadow_acc[*it];
-          abort();
+          return false;
         }
       }
     }
 
     runtime->unmap_region(ctx, inst);
+
+    return true;
   }
 
 private:
@@ -1178,8 +1180,8 @@ private:
   uint64_t task_arg_value = 0;
 };
 
-void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-               Runtime *runtime) {
+int top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
+              Runtime *runtime) {
   InputArgs args = Runtime::get_input_args();
   FuzzerConfig config = FuzzerConfig::parse_args(args.argc, args.argv);
   config.log_config(runtime, ctx);
@@ -1203,17 +1205,21 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     }
   }
 
-  forest.verify_contents();
+  if (!forest.verify_contents()) {
+    return 1;
+  }
 
   for (FutureCheck &check : futures) {
     uint64_t result = check.first.get_result<uint64_t>();
     uint64_t expected = check.second;
     if (result != expected) {
-      LOG_ONCE(log_fuzz.fatal()
+      LOG_ONCE(log_fuzz.error()
                << "Bad future: " << result << ", expected: " << expected);
-      abort();
+      return 2;
     }
   }
+
+  return 0;
 }
 
 static void create_mappers(Machine machine, Runtime *runtime,
@@ -1247,12 +1253,11 @@ int main(int argc, char **argv) {
   Runtime::preregister_projection_functor(PROJECTION_RANDOM_DEPTH_0_ID,
                                           new RandomProjection(root_seed.make_stream()));
 
-  Runtime::set_top_level_task_id(TOP_LEVEL_TASK_ID);
   {
     TaskVariantRegistrar registrar(TOP_LEVEL_TASK_ID, "top_level");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_replicable();
-    Runtime::preregister_task_variant<top_level>(registrar, "top_level");
+    Runtime::preregister_task_variant<int, top_level>(registrar, "top_level");
   }
 
   {
@@ -1331,5 +1336,22 @@ int main(int argc, char **argv) {
 
   Runtime::add_registration_callback(create_mappers);
 
-  return Runtime::start(argc, argv);
+  int start_code = Runtime::start(argc, argv, true /*background*/);
+  if (start_code != 0) {
+    return start_code;
+  }
+
+  int top_level_code;
+  {
+    TaskLauncher launcher(TOP_LEVEL_TASK_ID, TaskArgument());
+    Future result = Runtime::get_runtime()->launch_top_level_task(launcher);
+    top_level_code = result.get_result<int>();
+  }
+
+  int shutdown_code = Runtime::wait_for_shutdown();
+  if (shutdown_code != 0) {
+    return shutdown_code;
+  }
+
+  return top_level_code;
 }
