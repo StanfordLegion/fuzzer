@@ -144,7 +144,7 @@ struct FuzzerConfig {
 
 class OffsetProjection : public ProjectionFunctor {
 public:
-  OffsetProjection(uint64_t _offset) : offset(_offset) {}
+  explicit OffsetProjection(uint64_t _offset) : offset(_offset) {}
   bool is_functional(void) const override { return true; }
   bool is_invertible(void) const override { return false; }
   unsigned get_depth(void) const override { return 0; }
@@ -165,7 +165,7 @@ protected:
 
 class RandomProjection : public ProjectionFunctor {
 public:
-  RandomProjection(RngStream _stream) : stream(_stream) {}
+  explicit RandomProjection(RngStream _stream) : stream(_stream) {}
   bool is_functional(void) const override { return true; }
   bool is_invertible(void) const override { return false; }
   unsigned get_depth(void) const override { return 0; }
@@ -401,7 +401,8 @@ void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regi
 
 class RegionForest {
 public:
-  RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config, RngSeed &seed)
+  explicit RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config,
+                        RngSeed &seed)
       : runtime(_runtime), ctx(_ctx) {
     ispace = runtime->create_index_space<1>(
         ctx,
@@ -700,7 +701,7 @@ const char *redop_name(ReductionOpID redop) {
 
 class RequirementBuilder {
 public:
-  RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
+  explicit RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config), forest(_forest) {}
 
   void build(RngStream &rng, bool launch_complete, bool requires_projection) {
@@ -911,7 +912,7 @@ using FutureCheck = std::pair<Future, uint64_t>;
 
 class OperationBuilder {
 public:
-  OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
+  explicit OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config),
         forest(_forest),
         launch_domain(Rect<1>::make_empty()),
