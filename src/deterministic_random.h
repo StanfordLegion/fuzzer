@@ -45,7 +45,7 @@ public:
   explicit RngSeed(uint64_t seed);
 
   RngSeed(const RngSeed &rng) = delete;
-  explicit RngSeed(RngSeed &&rng);
+  RngSeed(RngSeed &&rng);
   RngSeed &operator=(const RngSeed &rng) = delete;
   RngSeed &operator=(RngSeed &&rng);
 
