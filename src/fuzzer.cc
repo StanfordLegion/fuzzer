@@ -1222,7 +1222,7 @@ int top_level(const FuzzerConfig &config, RngSeed &&seed, Context ctx, Runtime *
 int main(int argc, char **argv) {
   Runtime::initialize(&argc, &argv, true /* filter */);
   FuzzerConfig config = FuzzerConfig::parse_args(argc, argv);
-  RngSeed root_seed = RngSeed(config.initial_seed);
+  RngSeed root_seed(config.initial_seed);
 
   Runtime::preregister_projection_functor(PROJECTION_OFFSET_1_ID,
                                           new OffsetProjection(1));
