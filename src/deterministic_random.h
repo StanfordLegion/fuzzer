@@ -41,8 +41,8 @@ class RngChannel;
 
 class RngSeed {
 public:
-  RngSeed();
-  RngSeed(uint64_t seed);
+  RngSeed() = delete;
+  explicit RngSeed(uint64_t seed);
 
   RngSeed(const RngSeed &rng) = delete;
   RngSeed(RngSeed &&rng);
@@ -58,7 +58,7 @@ private:
 
 class RngStream {
 private:
-  RngStream(uint64_t seed, uint64_t stream);
+  explicit RngStream(uint64_t seed, uint64_t stream);
 
 public:
   uint64_t uniform_uint64_t();
@@ -81,7 +81,7 @@ static_assert(std::is_trivially_copyable_v<RngStream>);
 class RngChannel {
 private:
   template <typename T>
-  RngChannel(uint64_t seed, uint64_t stream, const T &hashable);
+  explicit RngChannel(uint64_t seed, uint64_t stream, const T &hashable);
 
 public:
   uint64_t uniform_uint64_t();
