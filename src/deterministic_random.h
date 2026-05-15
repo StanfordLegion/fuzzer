@@ -42,7 +42,7 @@ class RngChannel;
 class RngSeed {
 public:
   RngSeed() = delete;
-  explicit RngSeed(uint64_t &seed);
+  explicit RngSeed(uint64_t seed);
 
   RngSeed(const RngSeed &rng) = delete;
   explicit RngSeed(RngSeed &&rng);

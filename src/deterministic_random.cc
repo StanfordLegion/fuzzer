@@ -21,7 +21,7 @@
 
 #include "siphash.h"
 
-RngSeed::RngSeed(uint64_t &_seed) : seed(_seed), stream(0) { _seed = UINT64_MAX; }
+RngSeed::RngSeed(uint64_t _seed) : seed(_seed), stream(0) {}
 
 RngStream RngSeed::make_stream() {
   if (seed == UINT64_MAX) {
