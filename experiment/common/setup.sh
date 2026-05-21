@@ -137,17 +137,24 @@ if [[ ! -e legion ]]; then
     git clone "${clone_flags[@]}" https://gitlab.com/StanfordLegion/legion.git
 fi
 
+cuda_flag=
+gasnet_cuda_flag="-DLegion_EMBED_GASNet_CONFIGURE_ARGS=--disable-kind-cuda-uva"
+if [[ $FUZZER_USE_CUDA -eq 1 ]]; then
+    cuda_flag="-DLegion_USE_CUDA=ON"
+    gasnet_cuda_flag=
+fi
+
 pushd legion
 build_legion_config debug_single Debug
 build_legion_config spy_single Debug -DLegion_SPY=ON
 build_legion_config release_single Release
 if echo $FUZZER_NETWORKS | grep -q -w gasnetex; then
-    build_legion_config debug_multi_gex Debug "-DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT -DLegion_EMBED_GASNet_CONFIGURE_ARGS=--disable-kind-cuda-uva"
-    build_legion_config release_multi_gex Release "-DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT -DLegion_EMBED_GASNet_CONFIGURE_ARGS=--disable-kind-cuda-uva"
+    build_legion_config debug_multi_gex Debug "$cuda_flag -DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT $gasnet_cuda_flag"
+    build_legion_config release_multi_gex Release "$cuda_flag -DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT $gasnet_cuda_flag"
 fi
 if echo $FUZZER_NETWORKS | grep -q -w ucx; then
-    build_legion_config debug_multi_ucx Debug "-DLegion_NETWORKS=ucx -DCMAKE_INSTALL_RPATH=$ucx_ROOT/lib;$ucc_ROOT/lib"
-    build_legion_config release_multi_ucx Release "-DLegion_NETWORKS=ucx -DCMAKE_INSTALL_RPATH=$ucx_ROOT/lib;$ucc_ROOT/lib"
+    build_legion_config debug_multi_ucx Debug "$cuda_flag -DLegion_NETWORKS=ucx -DCMAKE_INSTALL_RPATH=$ucx_ROOT/lib;$ucc_ROOT/lib"
+    build_legion_config release_multi_ucx Release "$cuda_flag -DLegion_NETWORKS=ucx -DCMAKE_INSTALL_RPATH=$ucx_ROOT/lib;$ucc_ROOT/lib"
 fi
 popd
 

@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=40
-#SBATCH --partition=all
 #SBATCH --time=08:00:00
 
 export REALM_SYNTHETIC_CORE_MAP=
@@ -36,6 +35,17 @@ fi
 
 if [[ -n $FUZZER_BOOTSTRAP_DIR ]]; then
     export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$FUZZER_BOOTSTRAP_DIR"
+fi
+
+if [[ -n $FUZZER_GPUS_PER_TASK ]]; then
+    fuzzer_flags+=(
+        --gpus-per-task=$FUZZER_GPUS_PER_TASK
+    )
+fi
+if [[ -n $FUZZER_GPUS_PER_NODE ]]; then
+    fuzzer_flags+=(
+        --gpus-per-node=$FUZZER_GPUS_PER_NODE
+    )
 fi
 
 $launcher ./runner.py "${fuzzer_flags[@]}"
