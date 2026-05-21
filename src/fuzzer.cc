@@ -18,26 +18,18 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <type_traits>
 
 #include "deterministic_random.h"
 #include "legion.h"
 #include "logging_wrapper.h"
 #include "mapper.h"
+#include "tasks.h"
+#if defined(LEGION_USE_CUDA) || defined(LEGION_USE_HIP)
+#include "tasks_gpu.h"
+#endif
 
 using namespace Legion;
-
-enum TaskIDs {
-  VOID_LEAF_TASK_ID,
-  UINT64_LEAF_TASK_ID,
-  VOID_INNER_TASK_ID,
-  UINT64_INNER_TASK_ID,
-  VOID_REPLICABLE_LEAF_TASK_ID,
-  UINT64_REPLICABLE_LEAF_TASK_ID,
-  VOID_REPLICABLE_INNER_TASK_ID,
-  UINT64_REPLICABLE_INNER_TASK_ID,
-  COLOR_POINTS_TASK_ID,
-  TOP_LEVEL_TASK_ID,
-};
 
 enum ProjectionIDs {
   PROJECTION_OFFSET_1_ID = 1,
@@ -186,194 +178,16 @@ protected:
   RngStream stream;
 };
 
-template <typename T>
-const T unpack_args(const Task *task) {
-  if (task->arglen != sizeof(T)) {
-    log_fuzz.fatal() << "Wrong size in unpack_args: " << task->arglen
-                     << ", expected: " << sizeof(T);
-    abort();
-  }
-  const T result = *reinterpret_cast<const T *>(task->args);
-  return result;
-}
-
-struct PointTaskArgs {
-  PointTaskArgs(uint64_t _value) : value(_value) {}
-  uint64_t value;
-};
-
-static void write_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
-                        uint64_t value) {
-  const FieldAccessor<LEGION_WRITE_ONLY, uint64_t, 1, coord_t,
-                      Realm::AffineAccessor<uint64_t, 1, coord_t>>
-      acc(region, fid);
-  for (Domain::DomainPointIterator it(dom); it; ++it) {
-    acc[*it] = value;
-  }
-}
-
-static void modify_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
-                         uint64_t value) {
-  const FieldAccessor<LEGION_READ_WRITE, uint64_t, 1, coord_t,
-                      Realm::AffineAccessor<uint64_t, 1, coord_t>>
-      acc(region, fid);
-  for (Domain::DomainPointIterator it(dom); it; ++it) {
-    acc[*it] = (acc[*it] >> 1) + value;
-  }
-}
-
-template <typename REDOP>
-static void reduce_field(const PhysicalRegion &region, Domain &dom, FieldID fid,
-                         ReductionOpID redop, uint64_t value) {
-  const ReductionAccessor<REDOP, true /* exclusive */, 1, coord_t,
-                          Realm::AffineAccessor<uint64_t, 1, coord_t>>
-      acc(region, fid, redop);
-  for (Domain::DomainPointIterator it(dom); it; ++it) {
-    acc[*it] <<= value;
-  }
-}
-
-static void mutate_region(Runtime *runtime, const IndexSpace &subspace,
-                          const PhysicalRegion &region, PrivilegeMode privilege,
-                          ReductionOpID redop, const std::vector<FieldID> &fields,
-                          PointTaskArgs args) {
-  Domain dom = runtime->get_index_space_domain(subspace);
-  if ((privilege & LEGION_WRITE_ONLY) == LEGION_WRITE_ONLY) {
-    for (FieldID fid : fields) {
-      write_field(region, dom, fid, args.value);
-    }
-  } else if (privilege == LEGION_READ_WRITE) {
-    for (FieldID fid : fields) {
-      modify_field(region, dom, fid, args.value);
-    }
-  } else if (privilege == LEGION_REDUCE) {
-    for (FieldID fid : fields) {
-      switch (redop) {
-        case LEGION_REDOP_SUM_UINT64: {
-          reduce_field<SumReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
-        case LEGION_REDOP_PROD_UINT64: {
-          reduce_field<ProdReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
-        case LEGION_REDOP_MIN_UINT64: {
-          reduce_field<MinReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
-        case LEGION_REDOP_MAX_UINT64: {
-          reduce_field<MaxReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
-        case LEGION_REDOP_AND_UINT64: {
-          reduce_field<AndReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
-        case LEGION_REDOP_OR_UINT64: {
-          reduce_field<OrReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
-        case LEGION_REDOP_XOR_UINT64: {
-          reduce_field<XorReduction<uint64_t>>(region, dom, fid, redop, args.value);
-        } break;
-        default:
-          abort();
-      }
-    }
-  } else if ((privilege & LEGION_WRITE_PRIV) != 0) {
-    // We'd better not get here with write privileges.
-    abort();
-  }
-}
-
-static void task_body(const Task *task, const std::vector<PhysicalRegion> &regions,
-                      Context ctx, Runtime *runtime) {
-  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
-
-  for (size_t idx = 0; idx < task->regions.size(); ++idx) {
-    const RegionRequirement &req = task->regions[idx];
-    mutate_region(runtime, req.region.get_index_space(), regions[idx], req.privilege,
-                  req.redop, req.instance_fields, args);
-  }
-}
-
-uint64_t compute_task_result(const Task *task) {
-  const PointTaskArgs args = unpack_args<PointTaskArgs>(task);
-  // Twiddle the bits a bit to make some interesting bit patterns
-  uint64_t point = 0;
-  if (task->is_index_space) {
-    point = task->index_point[0];
-  }
-  return point ^ args.value;
-}
-
-static void inner_task_body(const Task *task, const std::vector<PhysicalRegion> &regions,
-                            Context ctx, Runtime *runtime) {
-  Future result;
-  for (size_t idx = 0; idx < task->regions.size(); ++idx) {
-    TaskLauncher launcher(VOID_LEAF_TASK_ID, TaskArgument(task->args, task->arglen));
-    launcher.tag = task->tag;
-    const RegionRequirement &req = task->regions[idx];
-    if (req.privilege == LEGION_REDUCE) {
-      launcher.add_region_requirement(RegionRequirement(req.region, req.privilege_fields,
-                                                        req.instance_fields, req.redop,
-                                                        LEGION_EXCLUSIVE, req.region));
-    } else {
-      launcher.add_region_requirement(
-          RegionRequirement(req.region, req.privilege_fields, req.instance_fields,
-                            req.privilege, LEGION_EXCLUSIVE, req.region));
-    }
-    runtime->execute_task(ctx, launcher);
-  }
-}
-
-void void_leaf(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-               Runtime *runtime) {
-  task_body(task, regions, ctx, runtime);
-}
-
-uint64_t uint64_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
-                     Context ctx, Runtime *runtime) {
-  task_body(task, regions, ctx, runtime);
-  return compute_task_result(task);
-}
-
-void void_inner(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-                Runtime *runtime) {
-  inner_task_body(task, regions, ctx, runtime);
-}
-
-uint64_t uint64_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
-                      Context ctx, Runtime *runtime) {
-  inner_task_body(task, regions, ctx, runtime);
-  return compute_task_result(task);
-}
-
-void void_replicable_leaf(const Task *task, const std::vector<PhysicalRegion> &regions,
-                          Context ctx, Runtime *runtime) {
-  task_body(task, regions, ctx, runtime);
-}
-
-uint64_t uint64_replicable_leaf(const Task *task,
-                                const std::vector<PhysicalRegion> &regions, Context ctx,
-                                Runtime *runtime) {
-  task_body(task, regions, ctx, runtime);
-  return compute_task_result(task);
-}
-
-void void_replicable_inner(const Task *task, const std::vector<PhysicalRegion> &regions,
-                           Context ctx, Runtime *runtime) {
-  inner_task_body(task, regions, ctx, runtime);
-}
-
-uint64_t uint64_replicable_inner(const Task *task,
-                                 const std::vector<PhysicalRegion> &regions, Context ctx,
-                                 Runtime *runtime) {
-  inner_task_body(task, regions, ctx, runtime);
-  return compute_task_result(task);
-}
-
 struct ColorPointsArgs {
-  ColorPointsArgs(RngStream _stream, uint64_t _width)
+  ColorPointsArgs() = delete;
+  explicit ColorPointsArgs(RngStream _stream, uint64_t _width)
       : stream(_stream), region_tree_width(_width) {}
 
   RngStream stream;
   uint64_t region_tree_width;
 };
+static_assert(std::is_trivially_copyable_v<ColorPointsArgs>);
+static_assert(std::has_unique_object_representations_v<ColorPointsArgs>);
 
 void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regions,
                        Context ctx, Runtime *runtime) {
@@ -923,6 +737,7 @@ public:
     select_region_requirement(rng);
     select_shard_offset(rng);
     select_task_arg(rng);
+    select_gpu_task_use_stream(rng);
   }
 
 private:
@@ -1012,6 +827,10 @@ private:
     task_arg_value = rng.uniform_range(0, 0xFFFFFFFFULL);
   }
 
+  void select_gpu_task_use_stream(RngStream &rng) {
+    gpu_task_use_stream = rng.uniform_range(0, 1);
+  }
+
 public:
   void execute(Runtime *runtime, Context ctx, uint64_t op_idx,
                std::vector<FutureCheck> &futures) {
@@ -1061,7 +880,7 @@ private:
 
   void execute_index_task(Runtime *runtime, Context ctx, uint64_t op_idx,
                           std::vector<FutureCheck> &futures) {
-    PointTaskArgs args(task_arg_value);
+    PointTaskArgs args(task_arg_value, gpu_task_use_stream);
     IndexTaskLauncher launcher(task_id, launch_domain, TaskArgument(&args, sizeof(args)),
                                ArgumentMap());
     static_assert(sizeof(MappingTagID) == sizeof(unsigned long));
@@ -1098,7 +917,7 @@ private:
   void execute_single_task(Runtime *runtime, Context ctx, uint64_t op_idx,
                            std::vector<FutureCheck> &futures) {
     for (uint64_t point = range_min; point <= range_max; ++point) {
-      PointTaskArgs args(task_arg_value);
+      PointTaskArgs args(task_arg_value, gpu_task_use_stream);
       TaskLauncher launcher(task_id, TaskArgument(&args, sizeof(args)));
       static_assert(sizeof(MappingTagID) == sizeof(unsigned long));
       launcher.tag = op_idx;
@@ -1176,6 +995,7 @@ private:
   RequirementBuilder req;
   uint64_t shard_offset = 0;
   uint64_t task_arg_value = 0;
+  uint64_t gpu_task_use_stream = 0;
 };
 
 void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
@@ -1249,69 +1069,104 @@ int main(int argc, char **argv) {
 
   Runtime::set_top_level_task_id(TOP_LEVEL_TASK_ID);
   {
-    TaskVariantRegistrar registrar(TOP_LEVEL_TASK_ID, "top_level");
+    TaskVariantRegistrar registrar(TOP_LEVEL_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_replicable();
     Runtime::preregister_task_variant<top_level>(registrar, "top_level");
   }
 
   {
-    TaskVariantRegistrar registrar(COLOR_POINTS_TASK_ID, "color_points");
+    TaskVariantRegistrar registrar(COLOR_POINTS_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_leaf();
     Runtime::preregister_task_variant<color_points_task>(registrar, "color_points");
   }
 
   {
-    TaskVariantRegistrar registrar(VOID_LEAF_TASK_ID, "void_leaf");
+    TaskVariantRegistrar registrar(VOID_LEAF_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_leaf();
     Runtime::preregister_task_variant<void_leaf>(registrar, "void_leaf");
   }
+#if defined(LEGION_USE_CUDA) || defined(LEGION_USE_HIP)
+  {
+    TaskVariantRegistrar registrar(VOID_LEAF_TASK_ID, "GPU");
+    registrar.add_constraint(ProcessorConstraint(Processor::TOC_PROC));
+    registrar.set_leaf();
+    Runtime::preregister_task_variant<void_leaf_gpu>(registrar, "void_leaf");
+  }
+#endif
 
   {
-    TaskVariantRegistrar registrar(UINT64_LEAF_TASK_ID, "uint64_leaf");
+    TaskVariantRegistrar registrar(UINT64_LEAF_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_leaf();
     Runtime::preregister_task_variant<uint64_t, uint64_leaf>(registrar, "uint64_leaf");
   }
+#if defined(LEGION_USE_CUDA) || defined(LEGION_USE_HIP)
+  {
+    TaskVariantRegistrar registrar(UINT64_LEAF_TASK_ID, "GPU");
+    registrar.add_constraint(ProcessorConstraint(Processor::TOC_PROC));
+    registrar.set_leaf();
+    Runtime::preregister_task_variant<uint64_t, uint64_leaf_gpu>(registrar,
+                                                                 "uint64_leaf");
+  }
+#endif
 
   {
-    TaskVariantRegistrar registrar(VOID_INNER_TASK_ID, "void_inner");
+    TaskVariantRegistrar registrar(VOID_INNER_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_inner();
     Runtime::preregister_task_variant<void_inner>(registrar, "void_inner");
   }
 
   {
-    TaskVariantRegistrar registrar(UINT64_INNER_TASK_ID, "uint64_inner");
+    TaskVariantRegistrar registrar(UINT64_INNER_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_inner();
     Runtime::preregister_task_variant<uint64_t, uint64_inner>(registrar, "uint64_inner");
   }
 
   {
-    TaskVariantRegistrar registrar(VOID_REPLICABLE_LEAF_TASK_ID, "void_replicable_leaf");
+    TaskVariantRegistrar registrar(VOID_REPLICABLE_LEAF_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_leaf();
     registrar.set_replicable();
     Runtime::preregister_task_variant<void_replicable_leaf>(registrar,
                                                             "void_replicable_leaf");
   }
+#if defined(LEGION_USE_CUDA) || defined(LEGION_USE_HIP)
+  {
+    TaskVariantRegistrar registrar(VOID_REPLICABLE_LEAF_TASK_ID, "GPU");
+    registrar.add_constraint(ProcessorConstraint(Processor::TOC_PROC));
+    registrar.set_leaf();
+    registrar.set_replicable();
+    Runtime::preregister_task_variant<void_replicable_leaf_gpu>(registrar,
+                                                                "void_replicable_leaf");
+  }
+#endif
 
   {
-    TaskVariantRegistrar registrar(UINT64_REPLICABLE_LEAF_TASK_ID,
-                                   "uint64_replicable_leaf");
+    TaskVariantRegistrar registrar(UINT64_REPLICABLE_LEAF_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_leaf();
     registrar.set_replicable();
     Runtime::preregister_task_variant<uint64_t, uint64_replicable_leaf>(
         registrar, "uint64_replicable_leaf");
   }
+#if defined(LEGION_USE_CUDA) || defined(LEGION_USE_HIP)
+  {
+    TaskVariantRegistrar registrar(UINT64_REPLICABLE_LEAF_TASK_ID, "GPU");
+    registrar.add_constraint(ProcessorConstraint(Processor::TOC_PROC));
+    registrar.set_leaf();
+    registrar.set_replicable();
+    Runtime::preregister_task_variant<uint64_t, uint64_replicable_leaf_gpu>(
+        registrar, "uint64_replicable_leaf");
+  }
+#endif
 
   {
-    TaskVariantRegistrar registrar(VOID_REPLICABLE_INNER_TASK_ID,
-                                   "void_replicable_inner");
+    TaskVariantRegistrar registrar(VOID_REPLICABLE_INNER_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_inner();
     registrar.set_replicable();
@@ -1320,8 +1175,7 @@ int main(int argc, char **argv) {
   }
 
   {
-    TaskVariantRegistrar registrar(UINT64_REPLICABLE_INNER_TASK_ID,
-                                   "uint64_replicable_inner");
+    TaskVariantRegistrar registrar(UINT64_REPLICABLE_INNER_TASK_ID, "CPU");
     registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
     registrar.set_inner();
     registrar.set_replicable();
