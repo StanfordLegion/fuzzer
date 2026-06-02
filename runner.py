@@ -30,6 +30,7 @@ class FuzzArgs:
     extra_args: list[str]
     fuzzer: str
     launcher: str
+    log: str
     spy: str
     verbose: int
     skip: int | None = None
@@ -89,8 +90,12 @@ def run_fuzzer(args):
     cmd.extend(arg for extra in args.extra_args for arg in shlex.split(extra))
     if args.gpus_per_task is not None:
         cmd.extend(["-ll:gpu", str(args.gpus_per_task)])
-    if args.spy:
+    log_dir = None
+    if args.log or args.spy:
         log_dir = tempfile.mkdtemp(dir=os.getcwd())
+    if args.log:
+        cmd.extend(["-level", args.log, "-logfile", os.path.join(log_dir, "out_%.log")])
+    elif args.spy:
         cmd.extend(
             ["-level", "legion_spy=2", "-logfile", os.path.join(log_dir, "spy_%.log")]
         )
@@ -110,22 +115,21 @@ def run_fuzzer(args):
         pr(args, f"Running {shlex.join(cmd)}")
     if args.verbose >= 4:
         pr(args, f"Environment {env}")
-    try:
-        proc = subprocess.run(
-            cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-        )
-        if proc.returncode == 0:
-            spy_proc = None
-            if args.spy:
-                spy_logs = glob.glob(os.path.join(log_dir, "spy_*.log"))
-                spy_proc = run_spy(args, spy_logs)
-            if spy_proc is None:
-                return
-            return (proc, spy_proc)
-        return (proc, None)
-    finally:
-        if args.spy:
+
+    proc = subprocess.run(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+    if proc.returncode == 0:
+        if log_dir is not None:
             shutil.rmtree(log_dir)
+        spy_proc = None
+        if args.spy:
+            spy_logs = glob.glob(os.path.join(log_dir, "spy_*.log"))
+            spy_proc = run_spy(args, spy_logs)
+        if spy_proc is None:
+            return
+        return (proc, spy_proc)
+    return (proc, None)
 
 
 def bisect_start(args):
@@ -216,6 +220,7 @@ def run_tests(
     extra_args,
     fuzzer,
     launcher,
+    log,
     spy,
     verbose,
 ):
@@ -224,6 +229,8 @@ def run_tests(
         assert gpus_per_task > 0
         assert gpus_per_node > 0
         assert gpus_per_node % gpus_per_task == 0
+
+    assert (log is None) or (spy is None), "Can only provide one of --log and --spy"
 
     thread_pool = multiprocessing.Pool(thread_count)
 
@@ -254,6 +261,7 @@ def run_tests(
                     extra_args=extra_args,
                     fuzzer=fuzzer,
                     launcher=launcher,
+                    log=log,
                     spy=spy,
                     verbose=verbose,
                 ),
@@ -339,6 +347,7 @@ def driver():
         help="location of fuzzer executable",
     )
     parser.add_argument("--launcher", help="launcher command")
+    parser.add_argument("--log", help="capture and save logs from failed runs")
     parser.add_argument("--spy", help="location of Legion Spy script")
     parser.add_argument(
         "-v",
