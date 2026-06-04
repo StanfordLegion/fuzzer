@@ -381,7 +381,7 @@ def driver():
     parser.add_argument(
         "--max-width",
         type=int,
-        default=256,
+        default=128,
         dest="max_width",
         help="maximum region tree width",
     )
@@ -395,7 +395,7 @@ def driver():
     parser.add_argument(
         "--max-fields",
         type=int,
-        default=32,
+        default=16,
         dest="max_fields",
         help="maximum region tree fields",
     )
