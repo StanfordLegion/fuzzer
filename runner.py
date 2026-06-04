@@ -292,7 +292,7 @@ def run_tests(
 
         if launcher is not None and max_ranks is not None:
             ranks = generate_random(max_ranks)
-            test_launcher = launcher.replace("{ranks}", ranks)
+            test_launcher = launcher.replace("{ranks}", str(ranks))
         else:
             test_launcher = launcher
 
