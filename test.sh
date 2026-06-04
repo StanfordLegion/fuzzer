@@ -30,9 +30,13 @@ if [[ $FUZZER_INSTALL_LEGION -eq 1 ]]; then
             -DCMAKE_CXX_FLAGS_DEBUG='-g -O2' # improve performance of debug code
             -DBUILD_SHARED_LIBS=ON # to improve link speed
         )
-        if [[ $FUZZER_DEBUG -eq 1 ]]; then
+        if [[ $FUZZER_SPY -eq 1 ]]; then
             legion_flags+=(
                 -DLegion_SPY=ON
+            )
+        fi
+        if [[ $FUZZER_VALGRIND -eq 1 ]]; then
+            legion_flags+=(
                 -DBUILD_MARCH= # to avoid -march=native for valgrind compatibility
             )
         fi

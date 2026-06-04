@@ -16,7 +16,7 @@
 #
 
 from __future__ import annotations
-import argparse, dataclasses, glob, multiprocessing, os, queue, shlex, shutil, subprocess, sys, tempfile
+import argparse, dataclasses, glob, math, multiprocessing, os, queue, random, shlex, shutil, subprocess, sys, tempfile
 
 
 @dataclasses.dataclass
@@ -25,6 +25,10 @@ class FuzzArgs:
     tnum: int
     seed: int
     num_ops: int
+    width: int
+    branch: int
+    fields: int
+    size: int
     gpus_per_task: int
     gpus_per_node: int
     extra_args: list[str]
@@ -48,6 +52,21 @@ def pr(args, message):
 def cuda_visible_devices(args):
     first_gpu = (args.tid * args.gpus_per_task) % args.gpus_per_node
     return ",".join(map(str, range(first_gpu, first_gpu + args.gpus_per_task)))
+
+
+def generate_random(max_value):
+    # Generate random numbers from a reciprocal (log-uniform) distribution.
+    #
+    # The intuition is that we have a high-dimension space to fuzz, and most
+    # "interesting" points maximize a single dimension (but perhaps sometimes
+    # require multiple dimensions to be maximized). Because the cost of testing
+    # goes up with the number of increased dimensions, we want to minimize how
+    # many we increase at once while still ensuring we eventually cover the
+    # entire space.
+
+    assert max_value >= 1
+    max_exponent = math.log2(max_value)
+    return int(math.ceil(2 ** random.uniform(0.0, max_exponent)))
 
 
 def run_spy(args, logfiles):
@@ -83,7 +102,21 @@ def run_fuzzer(args):
                 ["/usr/bin/env", f"CUDA_VISIBLE_DEVICES={cuda_visible_devices(args)}"]
             )
     cmd.extend(
-        [args.fuzzer, "-fuzz:seed", str(args.seed), "-fuzz:ops", str(args.num_ops)]
+        [
+            args.fuzzer,
+            "-fuzz:seed",
+            str(args.seed),
+            "-fuzz:ops",
+            str(args.num_ops),
+            "-fuzz:width",
+            str(args.width),
+            "-fuzz:branch",
+            str(args.branch),
+            "-fuzz:fields",
+            str(args.fields),
+            "-fuzz:size",
+            str(args.size),
+        ]
     )
     if args.skip is not None:
         cmd.extend(["-fuzz:skip", str(args.skip)])
@@ -157,7 +190,7 @@ def bisect_start(args):
 
 def bisect_stop(args):
     if args.verbose >= 2:
-        pr(f"Bisecting {args.num_ops} ops at seed {args.seed}")
+        pr(args, f"Bisecting {args.num_ops} ops at seed {args.seed}")
     good = 0
     bad = args.num_ops
     last_failure = None
@@ -213,13 +246,18 @@ def report_failure(proc):
 def run_tests(
     thread_count,
     num_tests,
-    num_ops,
     base_seed,
+    max_ops,
+    max_width,
+    max_branch,
+    max_fields,
+    max_size,
     gpus_per_task,
     gpus_per_node,
     extra_args,
     fuzzer,
     launcher,
+    max_ranks,
     log,
     spy,
     verbose,
@@ -230,7 +268,12 @@ def run_tests(
         assert gpus_per_node > 0
         assert gpus_per_node % gpus_per_task == 0
 
+    if max_ranks is not None:
+        assert launcher is not None, "The flag --max-ranks requires --launcher"
+
     assert (log is None) or (spy is None), "Can only provide one of --log and --spy"
+
+    random.seed(base_seed)
 
     thread_pool = multiprocessing.Pool(thread_count)
 
@@ -240,6 +283,18 @@ def run_tests(
         num_queued += 1
 
         seed = base_seed + tid
+
+        num_ops = generate_random(max_ops)
+        width = generate_random(max_width)
+        branch = generate_random(max_branch)
+        fields = generate_random(max_fields)
+        size = generate_random(max_size)
+
+        if launcher is not None and max_ranks is not None:
+            ranks = generate_random(max_ranks)
+            test_launcher = launcher.replace("{ranks}", ranks)
+        else:
+            test_launcher = launcher
 
         def callback(r):
             result_queue.put(r)
@@ -256,11 +311,15 @@ def run_tests(
                     tnum=num_tests,
                     seed=seed,
                     num_ops=num_ops,
+                    width=width,
+                    branch=branch,
+                    fields=fields,
+                    size=size,
                     gpus_per_task=gpus_per_task,
                     gpus_per_node=gpus_per_node,
                     extra_args=extra_args,
                     fuzzer=fuzzer,
-                    launcher=launcher,
+                    launcher=test_launcher,
                     log=log,
                     spy=spy,
                     verbose=verbose,
@@ -309,15 +368,43 @@ def driver():
         help="number of tests to run per seed",
     )
     parser.add_argument(
-        "-o",
-        "--ops",
-        type=int,
-        default=100,
-        dest="num_ops",
-        help="number of operations to run per test",
+        "-s", "--seed", type=int, default=0, dest="base_seed", help="base seed to use"
     )
     parser.add_argument(
-        "-s", "--seed", type=int, default=0, dest="base_seed", help="base seed to use"
+        "-o",
+        "--max-ops",
+        type=int,
+        default=256,
+        dest="max_ops",
+        help="maximum operations to run per test",
+    )
+    parser.add_argument(
+        "--max-width",
+        type=int,
+        default=256,
+        dest="max_width",
+        help="maximum region tree width",
+    )
+    parser.add_argument(
+        "--max-branch",
+        type=int,
+        default=16,
+        dest="max_branch",
+        help="maximum region tree branch factor",
+    )
+    parser.add_argument(
+        "--max-fields",
+        type=int,
+        default=32,
+        dest="max_fields",
+        help="maximum region tree fields",
+    )
+    parser.add_argument(
+        "--max-size",
+        type=int,
+        default=16,
+        dest="max_size",
+        help="maximum region tree size per subregion",
     )
     parser.add_argument(
         "--gpus-per-task",
@@ -347,6 +434,13 @@ def driver():
         help="location of fuzzer executable",
     )
     parser.add_argument("--launcher", help="launcher command")
+    parser.add_argument(
+        "--max-ranks",
+        type=int,
+        required=False,
+        dest="max_ranks",
+        help="maximum ranks per test",
+    )
     parser.add_argument("--log", help="capture and save logs from failed runs")
     parser.add_argument("--spy", help="location of Legion Spy script")
     parser.add_argument(

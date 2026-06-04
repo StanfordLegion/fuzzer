@@ -17,7 +17,7 @@ fuzzer_flags=(
     --fuzzer="$FUZZER_EXE"
     -j${FUZZER_THREADS:-4}
     -n${FUZZER_TEST_COUNT:-1000}
-    -o${FUZZER_OP_COUNT:-1000}
+    -o${FUZZER_OP_COUNT:-256}
     -s${FUZZER_SEED:-0}
     --extra="$FUZZER_EXTRA_FLAGS"
 )

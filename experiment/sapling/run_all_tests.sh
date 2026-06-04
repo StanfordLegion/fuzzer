@@ -10,7 +10,7 @@ fi
 root_dir="$(dirname "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")")"
 cd "$root_dir"
 
-export FUZZER_OP_COUNT=1000
+export FUZZER_OP_COUNT=256
 
 function run_fuzzer_config {
     config_name="$1"
