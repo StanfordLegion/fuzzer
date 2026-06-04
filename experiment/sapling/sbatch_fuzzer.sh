@@ -27,6 +27,7 @@ if [[ $FUZZER_MODE = single ]]; then
 elif [[ $FUZZER_MODE = multi ]]; then
     fuzzer_flags+=(
         --launcher="$FUZZER_LAUNCHER"
+        --max-ranks="$FUZZER_MAX_RANKS"
     )
 else
     echo "Don't recognize fuzzer mode $FUZZER_MODE"
