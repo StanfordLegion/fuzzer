@@ -394,30 +394,6 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
   }
 
   {
-    std::vector<FieldID> fields;
-    if (rng.uniform_range(0, 1) == 0) {
-      FieldSpace handle = req.region.get_field_space();
-      runtime->get_field_space_fields(ctx, handle, fields);
-    } else {
-      fields.insert(fields.end(), req.instance_fields.begin(), req.instance_fields.end());
-    }
-    rng.shuffle(fields);
-    bool contiguous = rng.uniform_range(0, 1) == 0;
-    bool inorder = rng.uniform_range(0, 1) == 0;
-
-    {
-      auto msg = log_map.debug();
-      msg << "random_mapping: FieldConstraint fields";
-      for (FieldID field : fields) {
-        msg << " " << field;
-      }
-      msg << " contiguous " << contiguous << " inorder " << inorder;
-    }
-
-    constraints.add_constraint(FieldConstraint(fields, contiguous, inorder));
-  }
-
-  {
     IndexSpace is = req.region.get_index_space();
     Domain domain = runtime->get_index_space_domain(ctx, is);
     int dim = domain.get_dim();
@@ -441,6 +417,44 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
     constraints.add_constraint(OrderingConstraint(dimension_ordering, contiguous));
   }
 
+  // Create two sets of constraints:
+  //
+  //  1. A reduced set of constraints for instance search. This reduces the
+  //     combinatorial explosion due to field order in the constraint set that
+  //     reduces the number of potentially matching instances.
+  //
+  //  2. A full set of constraints for instance creation. We'll randomize
+  //     everything here to ensure we're hitting all the possible cases.
+
+  LayoutConstraintSet search_constraints = constraints;
+  search_constraints.add_constraint(
+      FieldConstraint(req.instance_fields, false /* contiguous */, false /* inorder */));
+
+  LayoutConstraintSet creation_constraints = constraints;
+  {
+    std::vector<FieldID> fields;
+    if (rng.uniform_range(0, 1) == 0) {
+      FieldSpace handle = req.region.get_field_space();
+      runtime->get_field_space_fields(ctx, handle, fields);
+    } else {
+      fields.insert(fields.end(), req.instance_fields.begin(), req.instance_fields.end());
+    }
+    rng.shuffle(fields);
+    bool contiguous = rng.uniform_range(0, 1) == 0;
+    bool inorder = rng.uniform_range(0, 1) == 0;
+
+    {
+      auto msg = log_map.debug();
+      msg << "random_mapping: FieldConstraint fields";
+      for (FieldID field : fields) {
+        msg << " " << field;
+      }
+      msg << " contiguous " << contiguous << " inorder " << inorder;
+    }
+
+    creation_constraints.add_constraint(FieldConstraint(fields, contiguous, inorder));
+  }
+
   // Coarsen the region by a random amount by walking up the region tree
   LogicalRegion region = req.region;
   while (runtime->has_parent_logical_partition(ctx, region) &&
@@ -451,28 +465,38 @@ void FuzzMapper::random_mapping(const MapperContext ctx, RngChannel &rng,
   log_map.debug() << "random_mapping: Region " << region;
   std::vector<LogicalRegion> regions = {region};
 
-  // Either force the runtime to create a fresh instance, or allow one to be
-  // reused. We want forced creation to be less likely because the constraints
-  // above already make a match unlikely
-  PhysicalInstance instance;
-  if (rng.uniform_range(0, 3) == 0) {
-    if (!runtime->create_physical_instance(ctx, memory, constraints, regions, instance,
-                                           true /* acquire */, LEGION_GC_MAX_PRIORITY)) {
-      log_map.fatal() << "random_mapping: Failed to create instance";
+  // Find an existing instance, and if that fails, create one.
+  std::vector<PhysicalInstance> found;
+  runtime->find_physical_instances(ctx, memory, search_constraints, regions, found,
+                                   true /* acquire */);
+
+  // Even if we found an instance, with some small probability create a new
+  // one anyway. To reduce memory usage we only want to do this infrequently.
+  bool force = rng.uniform_range(0, 15) == 0;
+  if (force || found.empty()) {
+    // We can't use LEGION_GC_MIN_PRIORITY here because any pinned instances
+    // will eventually cause OOM. Instead we just spread out the priorities as
+    // much as we can and try to exercise the Legion GC as much as possible.
+    GCPriority priority = LEGION_GC_MIN_PRIORITY + rng.uniform_range(1, 8192);
+
+    PhysicalInstance created;
+    if (runtime->create_physical_instance(ctx, memory, creation_constraints, regions,
+                                          created, true /* acquire */, priority)) {
+      log_map.debug() << "random_mapping: Created instance (forced: " << force << ")";
+      output.push_back(created);
+      return;
+    }
+
+    if (found.empty()) {
+      log_map.fatal() << "random_mapping: Failed to create instance, and no existing "
+                         "instances can be reused";
       abort();
     }
-    log_map.debug() << "random_mapping: Created instanced (forced)";
-  } else {
-    bool created;
-    if (!runtime->find_or_create_physical_instance(ctx, memory, constraints, regions,
-                                                   instance, created, true /* acquire */,
-                                                   LEGION_GC_NEVER_PRIORITY)) {
-      log_map.fatal() << "random_mapping: Failed to create instance";
-      abort();
-    }
-    log_map.debug() << "random_mapping: Created instance? " << created;
   }
-  output.push_back(instance);
+
+  log_map.debug() << "random_mapping: Reusing existing instances";
+  rng.shuffle(found);
+  output.insert(output.end(), found.begin(), found.end());
 }
 
 void FuzzMapper::random_sources(RngChannel &rng,
