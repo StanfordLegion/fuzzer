@@ -29,8 +29,10 @@ class FuzzArgs:
     branch: int
     fields: int
     size: int
+    replicate: int
     gpus_per_task: int
     gpus_per_node: int
+    enable_network_shared_memory: bool
     extra_args: list[str]
     fuzzer: str
     launcher: str
@@ -116,6 +118,8 @@ def run_fuzzer(args):
             str(args.fields),
             "-fuzz:size",
             str(args.size),
+            "-fuzz:replicate",
+            str(args.replicate),
         ]
     )
     if args.skip is not None:
@@ -138,6 +142,14 @@ def run_fuzzer(args):
     env = {}
     if args.gpus_per_task is not None and not args.launcher:
         env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices(args)
+    if not args.enable_network_shared_memory:
+        # If we haven't specifically enabled network shared memory usage, turn
+        # it off so that we can test the actual network path.
+        if args.gpus_per_task is not None:
+            env["UCX_TLS"] = "^sm,cuda_ipc"
+        else:
+            env["UCX_TLS"] = "^sm"
+        env["GASNET_SUPERNODE_MAXSIZE"] = "1"
 
     if env:
         env = {**dict(os.environ.items()), **env}
@@ -252,6 +264,7 @@ def run_tests(
     max_branch,
     max_fields,
     max_size,
+    max_replicate,
     gpus_per_task,
     gpus_per_node,
     extra_args,
@@ -262,6 +275,8 @@ def run_tests(
     spy,
     verbose,
 ):
+    assert max_replicate >= 0
+
     assert (gpus_per_task is None) == (gpus_per_node is None)
     if gpus_per_task is not None:
         assert gpus_per_task > 0
@@ -289,6 +304,10 @@ def run_tests(
         branch = generate_random(max_branch)
         fields = generate_random(max_fields)
         size = generate_random(max_size)
+        # Use a uniform distribution for replicate to ensure we have good
+        # coverage of zero (not replicated)
+        replicate = random.randint(0, max_replicate)
+        enable_network_shared_memory = bool(random.getrandbits(1))
 
         if launcher is not None and max_ranks is not None:
             ranks = generate_random(max_ranks)
@@ -315,8 +334,10 @@ def run_tests(
                     branch=branch,
                     fields=fields,
                     size=size,
+                    replicate=replicate,
                     gpus_per_task=gpus_per_task,
                     gpus_per_node=gpus_per_node,
+                    enable_network_shared_memory=enable_network_shared_memory,
                     extra_args=extra_args,
                     fuzzer=fuzzer,
                     launcher=test_launcher,
@@ -339,8 +360,8 @@ def run_tests(
             if proc:
                 report_failure(proc)
                 num_failed += 1
-            num_remaining -= 1
-        thread_pool.join()
+                num_remaining -= 1
+                thread_pool.join()
     except KeyboardInterrupt:
         thread_pool.terminate()
         raise
@@ -405,6 +426,13 @@ def driver():
         default=16,
         dest="max_size",
         help="maximum region tree size per subregion",
+    )
+    parser.add_argument(
+        "--max-replicate",
+        type=int,
+        default=2,
+        dest="max_replicate",
+        help="maximum depth to replicate tasks in task tree",
     )
     parser.add_argument(
         "--gpus-per-task",

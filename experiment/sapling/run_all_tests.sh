@@ -23,12 +23,14 @@ function run_fuzzer_config {
 
     if [[ $mode = single ]]; then
         test_count=100000
+        nodes=1
         launcher="srun -n 1"
     elif [[ $mode = multi ]]; then
         # We can't do as many tests in multi-node mode because SLURM has a
         # hard upper bound on the number of steps per job.
         test_count=20000
-        launcher="srun -n {ranks} --ntasks-per-node {ranks} --overlap"
+        nodes=2
+        launcher="srun -n {ranks} --overlap"
         export FUZZER_THREADS=10
         export FUZZER_MAX_RANKS=8
     else
@@ -50,16 +52,12 @@ function run_fuzzer_config {
     # Generate a random seed so we explore a novel part of the state space.
     seed="$(( 16#$(openssl rand -hex 4) * test_count ))"
 
-    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_GPUS_PER_TASK="$gpus_per_task" FUZZER_GPUS_PER_NODE="$gpus_per_node" FUZZER_EXTRA_FLAGS="$fuzzer_flags" FUZZER_BOOTSTRAP_DIR="$bootstrap_dir" sbatch --nodes 1 --partition=$partition "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
+    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_GPUS_PER_TASK="$gpus_per_task" FUZZER_GPUS_PER_NODE="$gpus_per_node" FUZZER_EXTRA_FLAGS="$fuzzer_flags" FUZZER_BOOTSTRAP_DIR="$bootstrap_dir" sbatch --nodes=$nodes --partition=$partition "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
 }
 
 run_fuzzer_config      debug_single single all
 run_fuzzer_config    release_single single all
 run_fuzzer_config   debug_multi_gex  multi all
 run_fuzzer_config release_multi_gex  multi all
-run_fuzzer_config   debug_multi_gex  multi all "-fuzz:replicate 1"
-run_fuzzer_config release_multi_gex  multi all "-fuzz:replicate 1"
 run_fuzzer_config   debug_multi_ucx  multi all
 run_fuzzer_config release_multi_ucx  multi all
-run_fuzzer_config   debug_multi_ucx  multi all "-fuzz:replicate 1"
-run_fuzzer_config release_multi_ucx  multi all "-fuzz:replicate 1"

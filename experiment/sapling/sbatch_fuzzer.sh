@@ -1,11 +1,10 @@
 #!/bin/bash
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=40
-#SBATCH --time=08:00:00
+#SBATCH --time=24:00:00
 
 export REALM_SYNTHETIC_CORE_MAP=
 export REALM_BACKTRACE=1
-export UCX_TLS=^sm # shut off UCX shared memory to force network usage
 
 ulimit -S -c 0 # disable core dumps
 
