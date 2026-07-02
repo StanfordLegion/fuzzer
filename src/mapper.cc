@@ -207,10 +207,10 @@ void FuzzMapper::replicate_task(MapperContext ctx, const Task &task,
 
   bool is_replicable =
       runtime->is_replicable_variant(ctx, task.task_id, output.chosen_variant);
-  // For now assume we always have replicable variants at this level.
   if (!is_replicable) {
-    log_map.fatal() << "Bad variants in replicate_task: variant is not replicable";
-    abort();
+    log_map.debug()
+        << "replicate_task: No replicable variants available, not replicating";
+    return;
   }
 
   std::map<AddressSpace, Processor> targets;
