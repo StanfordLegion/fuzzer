@@ -145,12 +145,12 @@ if [[ $FUZZER_USE_CUDA -eq 1 ]]; then
 fi
 
 pushd legion
-build_legion_config debug_single Debug
-build_legion_config spy_single Debug -DLegion_SPY=ON
-build_legion_config release_single Release
+# build_legion_config debug_single Debug
+# build_legion_config spy_single Debug -DLegion_SPY=ON
+# build_legion_config release_single Release
 if echo $FUZZER_NETWORKS | grep -q -w gasnetex; then
     build_legion_config debug_multi_gex Debug "$cuda_flag -DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT $gasnet_cuda_flag"
-    build_legion_config release_multi_gex Release "$cuda_flag -DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT $gasnet_cuda_flag"
+    # build_legion_config release_multi_gex Release "$cuda_flag -DLegion_NETWORKS=gasnetex -DLegion_EMBED_GASNet=ON -DGASNet_CONDUIT=$FUZZER_GASNET_CONDUIT $gasnet_cuda_flag"
 fi
 if echo $FUZZER_NETWORKS | grep -q -w ucx; then
     build_legion_config debug_multi_ucx Debug "$cuda_flag -DLegion_NETWORKS=ucx -DCMAKE_INSTALL_RPATH=$ucx_ROOT/lib;$ucc_ROOT/lib"
@@ -158,12 +158,12 @@ if echo $FUZZER_NETWORKS | grep -q -w ucx; then
 fi
 popd
 
-build_fuzzer_config debug_single RelWithDebInfo
-build_fuzzer_config spy_single RelWithDebInfo
-build_fuzzer_config release_single Release
+# build_fuzzer_config debug_single RelWithDebInfo
+# build_fuzzer_config spy_single RelWithDebInfo
+# build_fuzzer_config release_single Release
 if echo $FUZZER_NETWORKS | grep -q -w gasnetex; then
     build_fuzzer_config debug_multi_gex RelWithDebInfo
-    build_fuzzer_config release_multi_gex Release
+    # build_fuzzer_config release_multi_gex Release
 fi
 if echo $FUZZER_NETWORKS | grep -q -w ucx; then
     build_fuzzer_config debug_multi_ucx RelWithDebInfo

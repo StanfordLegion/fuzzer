@@ -1,0 +1,63 @@
+#!/bin/bash
+
+set -e
+
+if [[ -z ${FUZZER_MACHINE} ]]; then
+    echo "Did you remember to source experiments/MY_MACHINE/env.sh? (For an appropriate value of MY_MACHINE)"
+    exit 1
+fi
+
+root_dir="$(dirname "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")")"
+cd "$root_dir"
+
+export FUZZER_OP_COUNT=256
+
+function run_fuzzer_config {
+    config_name="$1"
+    mode="$2"
+    partition="$3"
+    extra_flags="$4"
+
+    fuzzer_exe="$PWD/build_${config_name}/src/fuzzer"
+    fuzzer_flags="-ll:util 2 -ll:cpu 3 $extra_flags"
+
+    if [[ $mode = single ]]; then
+        test_count=100000
+        nodes=1
+        launcher="srun -n 1"
+    elif [[ $mode = multi ]]; then
+        # We can't do as many tests in multi-node mode because SLURM has a
+        # hard upper bound on the number of steps per job.
+        test_count=20000
+        nodes=2
+        launcher="srun -n {ranks} --overlap"
+        export FUZZER_THREADS=10
+        export FUZZER_MAX_RANKS=8
+    else
+        echo "Don't recognize fuzzer mode $mode"
+        exit 1
+    fi
+
+    bootstrap_dir=
+    if [[ $config_name = *ucx ]]; then
+        # UCX requires a boostrap .so file so figure out where that's located
+        bootstrap_dir="$PWD/legion/install_${config_name}/lib"
+    fi
+
+    if [[ $partition = gpu ]]; then
+        gpus_per_task=1
+        gpus_per_node=4
+    fi
+
+    # Generate a random seed so we explore a novel part of the state space.
+    seed="$(( 16#$(openssl rand -hex 4) * test_count ))"
+
+    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_GPUS_PER_TASK="$gpus_per_task" FUZZER_GPUS_PER_NODE="$gpus_per_node" FUZZER_EXTRA_FLAGS="$fuzzer_flags" FUZZER_BOOTSTRAP_DIR="$bootstrap_dir" sbatch --nodes=$nodes --partition=$partition "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
+}
+
+# run_fuzzer_config      debug_single single all
+# run_fuzzer_config    release_single single all
+run_fuzzer_config   debug_multi_gex  multi all
+# run_fuzzer_config release_multi_gex  multi all
+# run_fuzzer_config   debug_multi_ucx  multi all
+# run_fuzzer_config release_multi_ucx  multi all

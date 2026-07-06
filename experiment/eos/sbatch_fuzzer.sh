@@ -1,0 +1,52 @@
+#!/bin/bash
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=40
+#SBATCH --time=24:00:00
+
+export REALM_SYNTHETIC_CORE_MAP=
+#export REALM_BACKTRACE=1
+export REALM_FREEZE_ON_ERROR=1
+
+ulimit -S -c 0 # disable core dumps
+
+set -x
+
+launcher=
+
+fuzzer_flags=(
+    --fuzzer="$FUZZER_EXE"
+    -j${FUZZER_THREADS:-4}
+    -n${FUZZER_TEST_COUNT:-1000}
+    -o${FUZZER_OP_COUNT:-256}
+    -s${FUZZER_SEED:-0}
+    --extra="$FUZZER_EXTRA_FLAGS"
+)
+
+if [[ $FUZZER_MODE = single ]]; then
+    launcher="$FUZZER_LAUNCHER"
+elif [[ $FUZZER_MODE = multi ]]; then
+    fuzzer_flags+=(
+        --launcher="$FUZZER_LAUNCHER"
+        --max-ranks="$FUZZER_MAX_RANKS"
+    )
+else
+    echo "Don't recognize fuzzer mode $FUZZER_MODE"
+    exit 1
+fi
+
+if [[ -n $FUZZER_BOOTSTRAP_DIR ]]; then
+    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$FUZZER_BOOTSTRAP_DIR"
+fi
+
+if [[ -n $FUZZER_GPUS_PER_TASK ]]; then
+    fuzzer_flags+=(
+        --gpus-per-task=$FUZZER_GPUS_PER_TASK
+    )
+fi
+if [[ -n $FUZZER_GPUS_PER_NODE ]]; then
+    fuzzer_flags+=(
+        --gpus-per-node=$FUZZER_GPUS_PER_NODE
+    )
+fi
+
+$launcher ./runner.py "${fuzzer_flags[@]}"
