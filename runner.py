@@ -32,7 +32,8 @@ class FuzzArgs:
     replicate: int
     gpus_per_task: int
     gpus_per_node: int
-    enable_network_shared_memory: bool
+    gasnet_supernode_size: int
+    ucx_enable_shared_memory: bool
     extra_args: list[str]
     fuzzer: str
     launcher: str
@@ -142,14 +143,13 @@ def run_fuzzer(args):
     env = {}
     if args.gpus_per_task is not None and not args.launcher:
         env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices(args)
-    if not args.enable_network_shared_memory:
-        # If we haven't specifically enabled network shared memory usage, turn
-        # it off so that we can test the actual network path.
+    if args.gasnet_supernode_size > 0:
+        env["GASNET_SUPERNODE_MAXSIZE"] = str(gasnet_supernode_size)
+    if not args.ucx_enable_shared_memory:
         if args.gpus_per_task is not None:
             env["UCX_TLS"] = "^sm,cuda_ipc"
         else:
             env["UCX_TLS"] = "^sm"
-        env["GASNET_SUPERNODE_MAXSIZE"] = "1"
 
     if env:
         env = {**dict(os.environ.items()), **env}
@@ -307,7 +307,8 @@ def run_tests(
         # Use a uniform distribution for replicate to ensure we have good
         # coverage of zero (not replicated)
         replicate = random.randint(0, max_replicate)
-        enable_network_shared_memory = bool(random.getrandbits(1))
+        gasnet_supernode_size = random.randint(0, 2)
+        ucx_enable_shared_memory = bool(random.getrandbits(1))
 
         if launcher is not None and max_ranks is not None:
             ranks = generate_random(max_ranks)
@@ -337,7 +338,8 @@ def run_tests(
                     replicate=replicate,
                     gpus_per_task=gpus_per_task,
                     gpus_per_node=gpus_per_node,
-                    enable_network_shared_memory=enable_network_shared_memory,
+                    gasnet_supernode_size=gasnet_supernode_size,
+                    ucx_enable_shared_memory=ucx_enable_shared_memory,
                     extra_args=extra_args,
                     fuzzer=fuzzer,
                     launcher=test_launcher,
