@@ -144,7 +144,7 @@ def run_fuzzer(args):
     if args.gpus_per_task is not None and not args.launcher:
         env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices(args)
     if args.gasnet_supernode_size > 0:
-        env["GASNET_SUPERNODE_MAXSIZE"] = str(gasnet_supernode_size)
+        env["GASNET_SUPERNODE_MAXSIZE"] = str(args.gasnet_supernode_size)
     if not args.ucx_enable_shared_memory:
         if args.gpus_per_task is not None:
             env["UCX_TLS"] = "^sm,cuda_ipc"
