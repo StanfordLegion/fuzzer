@@ -130,7 +130,19 @@ def run_fuzzer(args):
         cmd.extend(["-ll:gpu", str(args.gpus_per_task)])
     log_dir = None
     if args.log or args.spy:
-        log_dir = tempfile.mkdtemp(dir=os.getcwd())
+        log_dir = tempfile.mkdtemp()
+    if log_dir and args.launcher:
+        # When we're doing a distributed run, the mkdtemp call only creates the
+        # temporary directory on one node. To avoid failures we run the
+        # launcher to make sure it's available everywhere.
+        mkdir_cmd = []
+        mkdir_cmd.extend(shlex.split(args.launcher))
+        mkdir_cmd.extend(["mkdir", "-p", log_dir])
+        mkdir_proc = subprocess.run(
+            mkdir_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        )
+        if mkdir_proc.returncode != 0:
+            return (mkdir_proc, None)
     if args.log:
         cmd.extend(["-level", args.log, "-logfile", os.path.join(log_dir, "out_%.log")])
     elif args.spy:
@@ -165,15 +177,27 @@ def run_fuzzer(args):
         cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
     if proc.returncode == 0:
-        if log_dir is not None:
-            shutil.rmtree(log_dir)
         spy_proc = None
         if args.spy:
             spy_logs = glob.glob(os.path.join(log_dir, "spy_*.log"))
             spy_proc = run_spy(args, spy_logs)
-        if spy_proc is None:
-            return
-        return (proc, spy_proc)
+            if spy_proc is not None:
+                return (proc, spy_proc)
+        if log_dir is not None:
+            if args.launcher:
+                # In a distributed run we need to clean up the temporary
+                # directory on all nodes or we'll eventually run out of space.
+                rm_cmd = []
+                rm_cmd.extend(shlex.split(args.launcher))
+                rm_cmd.extend(["rm", "-rf", log_dir])
+                rm_proc = subprocess.run(
+                    rm_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+                )
+                if rm_proc.returncode != 0:
+                    return (proc, rm_proc)
+            else:
+                shutil.rmtree(log_dir)
+        return
     return (proc, None)
 
 
