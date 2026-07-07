@@ -16,7 +16,7 @@
 #
 
 from __future__ import annotations
-import argparse, dataclasses, glob, math, multiprocessing, os, queue, random, shlex, shutil, subprocess, sys, tempfile
+import argparse, dataclasses, glob, math, multiprocessing, os, queue, random, shlex, shutil, subprocess, sys, tempfile, time
 
 
 @dataclasses.dataclass
@@ -398,7 +398,9 @@ def run_tests(
 
     thread_pool.close()
 
+    time_start = time.time()
     num_remaining = num_queued
+    num_passed = 0
     num_failed = 0
     try:
         while num_remaining > 0:
@@ -406,11 +408,22 @@ def run_tests(
             if proc:
                 report_failure(proc)
                 num_failed += 1
-                num_remaining -= 1
-                thread_pool.join()
+            else:
+                num_passed += 1
+            num_remaining -= 1
+            if (num_passed + num_failed) % 100 == 0:
+                time_now = time.time()
+                elapsed = time_now - time_start
+                print(
+                    f"Time elapsed: {elapsed:6.1f} s, passed: {num_passed:5d}, failed: {num_failed:5d}, remaining: {num_remaining:5d}",
+                    flush=True,
+                )
+        thread_pool.join()
     except KeyboardInterrupt:
         thread_pool.terminate()
         raise
+    assert num_remaining == 0
+    assert num_passed + num_failed == num_queued
 
     print(f"Found {num_failed} failures", flush=True)
     if num_failed > 0:
