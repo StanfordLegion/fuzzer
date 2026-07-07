@@ -39,6 +39,8 @@ class FuzzArgs:
     launcher: str
     log: str
     spy: str
+    tmp_root: str
+    tmp_root_is_shared: str
     verbose: int
     skip: int | None = None
 
@@ -70,6 +72,35 @@ def generate_random(max_value):
     assert max_value >= 1
     max_exponent = math.log2(max_value)
     return int(math.ceil(2 ** random.uniform(0.0, max_exponent)))
+
+
+def run_mkdir(args, path):
+    # When we're doing a distributed run, mkdtemp only creates the temporary
+    # directory on one node. To avoid failures we run the launcher to make sure
+    # it's available everywhere.
+    cmd = []
+    cmd.extend(shlex.split(args.launcher))
+    cmd.extend(["mkdir", "-p", path])
+    if args.verbose >= 3:
+        pr(args, f"Running {shlex.join(cmd)}")
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if proc.returncode == 0:
+        return
+    return proc
+
+
+def run_rm_rf(args, path):
+    # In a distributed run we need to clean up the temporary directory on all
+    # nodes or we'll eventually run out of space.
+    cmd = []
+    cmd.extend(shlex.split(args.launcher))
+    cmd.extend(["rm", "-rf", path])
+    if args.verbose >= 3:
+        pr(args, f"Running {shlex.join(cmd)}")
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if proc.returncode == 0:
+        return
+    return proc
 
 
 def run_spy(args, logfiles):
@@ -130,18 +161,10 @@ def run_fuzzer(args):
         cmd.extend(["-ll:gpu", str(args.gpus_per_task)])
     log_dir = None
     if args.log or args.spy:
-        log_dir = tempfile.mkdtemp()
-    if log_dir and args.launcher:
-        # When we're doing a distributed run, the mkdtemp call only creates the
-        # temporary directory on one node. To avoid failures we run the
-        # launcher to make sure it's available everywhere.
-        mkdir_cmd = []
-        mkdir_cmd.extend(shlex.split(args.launcher))
-        mkdir_cmd.extend(["mkdir", "-p", log_dir])
-        mkdir_proc = subprocess.run(
-            mkdir_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-        )
-        if mkdir_proc.returncode != 0:
+        log_dir = tempfile.mkdtemp(dir=args.tmp_root)
+    if log_dir and args.launcher and not args.tmp_root_is_shared:
+        mkdir_proc = run_mkdir(args, log_dir)
+        if mkdir_proc is not None:
             return (mkdir_proc, None)
     if args.log:
         cmd.extend(["-level", args.log, "-logfile", os.path.join(log_dir, "out_%.log")])
@@ -184,16 +207,9 @@ def run_fuzzer(args):
             if spy_proc is not None:
                 return (proc, spy_proc)
         if log_dir is not None:
-            if args.launcher:
-                # In a distributed run we need to clean up the temporary
-                # directory on all nodes or we'll eventually run out of space.
-                rm_cmd = []
-                rm_cmd.extend(shlex.split(args.launcher))
-                rm_cmd.extend(["rm", "-rf", log_dir])
-                rm_proc = subprocess.run(
-                    rm_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-                )
-                if rm_proc.returncode != 0:
+            if args.launcher and not args.tmp_root_is_shared:
+                rm_proc = run_rm_rf(args, log_dir)
+                if rm_proc is not None:
                     return (proc, rm_proc)
             else:
                 shutil.rmtree(log_dir)
@@ -297,6 +313,8 @@ def run_tests(
     max_ranks,
     log,
     spy,
+    tmp_root,
+    tmp_root_is_shared,
     verbose,
 ):
     assert max_replicate >= 0
@@ -369,6 +387,8 @@ def run_tests(
                     launcher=test_launcher,
                     log=log,
                     spy=spy,
+                    tmp_root=tmp_root,
+                    tmp_root_is_shared=tmp_root_is_shared,
                     verbose=verbose,
                 ),
             ),
@@ -497,6 +517,14 @@ def driver():
     )
     parser.add_argument("--log", help="capture and save logs from failed runs")
     parser.add_argument("--spy", help="location of Legion Spy script")
+    parser.add_argument(
+        "--tmp-root", help="root directory to use for temporary files (e.g., logs)"
+    )
+    parser.add_argument(
+        "--tmp-root-is-shared",
+        action="store_true",
+        help="in a distributed run, TMP_ROOT lives on a shared filesystem",
+    )
     parser.add_argument(
         "-v",
         "--verbose",
