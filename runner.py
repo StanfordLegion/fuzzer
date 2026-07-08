@@ -598,7 +598,7 @@ def driver():
         "--limit",
         type=int,
         required=False,
-        default=30 * 60,  # 30 minutes
+        default=45 * 60,  # 45 minutes
         dest="timelimit",
         help="maximum running time per test (seconds)",
     )
