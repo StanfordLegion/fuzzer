@@ -37,7 +37,7 @@ class FuzzArgs:
     extra_args: list[str]
     fuzzer: str
     launcher: str
-    timeout: str
+    timelimit: str
     timeout_action: str
     log: str
     spy: str
@@ -151,7 +151,7 @@ def run_cmd_with_timeout(args, cmd, env):
         cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
     try:
-        return wrap_completed_process(proc, *proc.communicate(timeout=args.timeout))
+        return wrap_completed_process(proc, *proc.communicate(timeout=args.timelimit))
     except subprocess.TimeoutExpired:
         time_now = time.monotonic()
         elapsed = time_now - time_start
@@ -373,7 +373,8 @@ def run_tests(
     fuzzer,
     launcher,
     max_ranks,
-    timeout,
+    timelimit,
+    poll_interval,
     timeout_action,
     log,
     spy,
@@ -449,7 +450,7 @@ def run_tests(
                     extra_args=extra_args,
                     fuzzer=fuzzer,
                     launcher=test_launcher,
-                    timeout=timeout,
+                    timelimit=timelimit,
                     timeout_action=timeout_action,
                     log=log,
                     spy=spy,
@@ -465,26 +466,33 @@ def run_tests(
     thread_pool.close()
 
     time_start = time.monotonic()
+    time_last = time_start
     num_remaining = num_queued
     num_passed = 0
     num_failed = 0
     digits = len(str(num_queued))
     try:
         while num_remaining > 0:
-            proc = result_queue.get()
-            if proc:
-                report_failure(proc)
-                num_failed += 1
-            else:
-                num_passed += 1
-            num_remaining -= 1
-            if (num_passed + num_failed) % 100 == 0:
+            try:
+                proc = result_queue.get(timeout=poll_interval)
+                if proc:
+                    report_failure(proc)
+                    num_failed += 1
+                else:
+                    num_passed += 1
+                num_remaining -= 1
+            except queue.Empty:
+                pass
+
+            if poll_interval:
                 time_now = time.monotonic()
-                elapsed = time_now - time_start
-                print(
-                    f"Time elapsed: {elapsed:6.1f} s, passed: {num_passed:{digits}}, failed: {num_failed:{digits}}, remaining: {num_remaining:{digits}}",
-                    flush=True,
-                )
+                if (time_now >= time_last + poll_interval) or (num_remaining == 0):
+                    elapsed = time_now - time_start
+                    print(
+                        f"Time elapsed: {elapsed:6.1f} s, passed: {num_passed:{digits}}, failed: {num_failed:{digits}}, remaining: {num_remaining:{digits}}",
+                        flush=True,
+                    )
+                    time_last = time_now
         thread_pool.join()
     except KeyboardInterrupt:
         thread_pool.terminate()
@@ -587,11 +595,20 @@ def driver():
         help="maximum ranks per test",
     )
     parser.add_argument(
-        "--timeout",
+        "--limit",
         type=int,
         required=False,
         default=30 * 60,  # 30 minutes
-        help="per-process timeout (seconds)",
+        dest="timelimit",
+        help="maximum running time per test (seconds)",
+    )
+    parser.add_argument(
+        "--poll",
+        type=int,
+        required=False,
+        default=5 * 60,  # 5 minutes
+        dest="poll_interval",
+        help="test completion polling interval (seconds)",
     )
     parser.add_argument(
         "--timeout-action",
