@@ -16,7 +16,7 @@
 #
 
 from __future__ import annotations
-import argparse, dataclasses, glob, math, multiprocessing, os, queue, random, shlex, shutil, subprocess, sys, tempfile, time
+import argparse, dataclasses, glob, math, multiprocessing, os, queue, random, shlex, shutil, signal, subprocess, sys, tempfile, time
 
 
 @dataclasses.dataclass
@@ -37,12 +37,24 @@ class FuzzArgs:
     extra_args: list[str]
     fuzzer: str
     launcher: str
+    timeout: str
+    timeout_action: str
     log: str
     spy: str
     tmp_root: str
     tmp_root_is_shared: str
     verbose: int
     skip: int | None = None
+
+
+# We need to manually manage timeouts so replicate the
+# subprocess.CompletedProcess interface here.
+@dataclasses.dataclass
+class CompletedProcess:
+    args: list[str]
+    returncode: int
+    stdout: str | bytes | None
+    stderr: str | bytes | None
 
 
 def prefix(args):
@@ -124,6 +136,58 @@ def run_spy(args, logfiles):
     return proc
 
 
+def wrap_completed_process(proc, stdout, stderr):
+    return CompletedProcess(
+        args=proc.args,
+        returncode=proc.returncode,
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+    )
+
+
+def run_cmd_with_timeout(args, cmd, env):
+    time_start = time.monotonic()
+    proc = subprocess.Popen(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+    try:
+        return wrap_completed_process(proc, *proc.communicate(timeout=args.timeout))
+    except subprocess.TimeoutExpired:
+        time_now = time.monotonic()
+        elapsed = time_now - time_start
+        if args.timeout_action == "kill":
+            pr(
+                args,
+                f"Possible freeze, program still running after {elapsed:.1f} seconds (killing): {shlex.join(cmd)}",
+            )
+            # Attempt a clean exit first, wait 30 seconds, then kill it.
+            proc.terminate()
+            try:
+                return wrap_completed_process(proc, *proc.communicate(timeout=30))
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                return wrap_completed_process(proc, *proc.communicate())
+        elif args.timeout_action == "warn":
+            # Do NOT kill.
+            pr(
+                args,
+                f"Possible freeze, program still running after {elapsed:.1f} seconds (waiting): {shlex.join(cmd)}",
+            )
+            return wrap_completed_process(proc, *proc.communicate())
+        elif args.timeout_action == "core":
+            pr(
+                args,
+                f"Possible freeze, program still running after {elapsed:.1f} seconds (dumping core): {shlex.join(cmd)}",
+            )
+            # Send SIGABRT and wait for process to dump core. Right now we
+            # don't set a time limit on this because we don't know how long it
+            # will take.
+            proc.send_signal(signal.SIGABRT)
+            return wrap_completed_process(proc, *proc.communicate())
+        else:
+            assert False, f"Unknown timeout action {args.timeout_action}"
+
+
 def run_fuzzer(args):
     cmd = []
     if args.launcher:
@@ -196,9 +260,7 @@ def run_fuzzer(args):
     if args.verbose >= 4:
         pr(args, f"Environment {env}")
 
-    proc = subprocess.run(
-        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
+    proc = run_cmd_with_timeout(args, cmd, env)
     if proc.returncode == 0:
         spy_proc = None
         if args.spy:
@@ -311,6 +373,8 @@ def run_tests(
     fuzzer,
     launcher,
     max_ranks,
+    timeout,
+    timeout_action,
     log,
     spy,
     tmp_root,
@@ -385,6 +449,8 @@ def run_tests(
                     extra_args=extra_args,
                     fuzzer=fuzzer,
                     launcher=test_launcher,
+                    timeout=timeout,
+                    timeout_action=timeout_action,
                     log=log,
                     spy=spy,
                     tmp_root=tmp_root,
@@ -398,10 +464,11 @@ def run_tests(
 
     thread_pool.close()
 
-    time_start = time.time()
+    time_start = time.monotonic()
     num_remaining = num_queued
     num_passed = 0
     num_failed = 0
+    digits = len(str(num_queued))
     try:
         while num_remaining > 0:
             proc = result_queue.get()
@@ -412,10 +479,10 @@ def run_tests(
                 num_passed += 1
             num_remaining -= 1
             if (num_passed + num_failed) % 100 == 0:
-                time_now = time.time()
+                time_now = time.monotonic()
                 elapsed = time_now - time_start
                 print(
-                    f"Time elapsed: {elapsed:6.1f} s, passed: {num_passed:5d}, failed: {num_failed:5d}, remaining: {num_remaining:5d}",
+                    f"Time elapsed: {elapsed:6.1f} s, passed: {num_passed:{digits}}, failed: {num_failed:{digits}}, remaining: {num_remaining:{digits}}",
                     flush=True,
                 )
         thread_pool.join()
@@ -462,49 +529,42 @@ def driver():
         "--max-width",
         type=int,
         default=128,
-        dest="max_width",
         help="maximum region tree width",
     )
     parser.add_argument(
         "--max-branch",
         type=int,
         default=16,
-        dest="max_branch",
         help="maximum region tree branch factor",
     )
     parser.add_argument(
         "--max-fields",
         type=int,
         default=16,
-        dest="max_fields",
         help="maximum region tree fields",
     )
     parser.add_argument(
         "--max-size",
         type=int,
         default=16,
-        dest="max_size",
         help="maximum region tree size per subregion",
     )
     parser.add_argument(
         "--max-replicate",
         type=int,
         default=2,
-        dest="max_replicate",
         help="maximum depth to replicate tasks in task tree",
     )
     parser.add_argument(
         "--gpus-per-task",
         type=int,
         required=False,
-        dest="gpus_per_task",
         help="number of GPUs to assign per task",
     )
     parser.add_argument(
         "--gpus-per-node",
         type=int,
         required=False,
-        dest="gpus_per_node",
         help="total number of GPUs available per node",
     )
     parser.add_argument(
@@ -517,7 +577,6 @@ def driver():
     parser.add_argument(
         "--fuzzer",
         required=True,
-        dest="fuzzer",
         help="location of fuzzer executable",
     )
     parser.add_argument("--launcher", help="launcher command")
@@ -525,8 +584,21 @@ def driver():
         "--max-ranks",
         type=int,
         required=False,
-        dest="max_ranks",
         help="maximum ranks per test",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        required=False,
+        default=30 * 60,  # 30 minutes
+        help="per-process timeout (seconds)",
+    )
+    parser.add_argument(
+        "--timeout-action",
+        required=False,
+        default="warn",
+        choices=["warn", "kill", "core"],
+        help="action to perform on timeout",
     )
     parser.add_argument("--log", help="capture and save logs from failed runs")
     parser.add_argument("--spy", help="location of Legion Spy script")
