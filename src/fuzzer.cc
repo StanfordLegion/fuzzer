@@ -374,21 +374,38 @@ public:
 
     Domain dom = runtime->get_index_space_domain(root.get_index_space());
 
+    std::map<FieldID, FieldAccessor<LEGION_READ_ONLY, uint64_t, 1, coord_t,
+                                    Realm::AffineAccessor<uint64_t, 1, coord_t>>>
+        acc, shadow_acc;
     for (FieldID field : fields) {
-      log_fuzz.info() << "Verifying field: " << field;
-      const FieldAccessor<LEGION_READ_ONLY, uint64_t, 1, coord_t,
-                          Realm::AffineAccessor<uint64_t, 1, coord_t>>
-          acc(inst, field);
-      const FieldAccessor<LEGION_READ_ONLY, uint64_t, 1, coord_t,
-                          Realm::AffineAccessor<uint64_t, 1, coord_t>>
-          shadow_acc(shadow_inst, field);
-      for (Domain::DomainPointIterator it(dom); it; ++it) {
-        if (acc[*it] != shadow_acc[*it]) {
-          log_fuzz.fatal() << "Bad region value: " << acc[*it]
-                           << ", expected: " << shadow_acc[*it];
-          abort();
+      acc.emplace(
+          field, FieldAccessor<LEGION_READ_ONLY, uint64_t, 1, coord_t,
+                               Realm::AffineAccessor<uint64_t, 1, coord_t>>{inst, field});
+      shadow_acc.emplace(
+          field,
+          FieldAccessor<LEGION_READ_ONLY, uint64_t, 1, coord_t,
+                        Realm::AffineAccessor<uint64_t, 1, coord_t>>{shadow_inst, field});
+    }
+
+    uint64_t bad_points = 0;
+    constexpr uint64_t report_limit = 100;
+    for (Domain::DomainPointIterator it(dom); it; ++it) {
+      for (FieldID field : fields) {
+        if (acc.at(field)[*it] != shadow_acc.at(field)[*it]) {
+          if (bad_points < report_limit) {
+            log_fuzz.error() << "Bad region value for point: " << *it
+                             << ", field: " << field << ", value: " << acc.at(field)[*it]
+                             << ", expected: " << shadow_acc.at(field)[*it];
+          } else if (bad_points == report_limit) {
+            log_fuzz.error() << "Reached limit, eliding additional bad region values";
+          }
+          bad_points++;
         }
       }
+    }
+    if (bad_points > 0) {
+      log_fuzz.fatal() << "Encountered " << bad_points << " bad region values";
+      abort();
     }
 
     runtime->unmap_region(ctx, inst);
