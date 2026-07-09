@@ -370,7 +370,7 @@ def run_tests(
     gpus_per_task,
     gpus_per_node,
     extra_args,
-    fuzzer,
+    fuzzers,
     launcher,
     max_ranks,
     timelimit,
@@ -416,6 +416,7 @@ def run_tests(
         replicate = random.randint(0, max_replicate)
         gasnet_supernode_size = random.randint(0, 2)
         ucx_enable_shared_memory = bool(random.getrandbits(1))
+        fuzzer = random.choice(fuzzers)
 
         if launcher is not None and max_ranks is not None:
             ranks = generate_random(max_ranks)
@@ -585,7 +586,10 @@ def driver():
     parser.add_argument(
         "--fuzzer",
         required=True,
-        help="location of fuzzer executable",
+        action="append",
+        default=[],
+        dest="fuzzers",
+        help="location of fuzzer executable(s)",
     )
     parser.add_argument("--launcher", help="launcher command")
     parser.add_argument(

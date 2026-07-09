@@ -13,12 +13,17 @@ cd "$root_dir"
 export FUZZER_OP_COUNT=256
 
 function run_fuzzer_config {
-    config_name="$1"
+    IFS=":" read -ra config_names <<< "$1"
     mode="$2"
     partition="$3"
     extra_flags="$4"
 
-    fuzzer_exe="$PWD/build_${config_name}/src/fuzzer"
+    fuzzer_exe=()
+    for config_name in "${config_names[@]}"; do
+        fuzzer_exe+=(
+            "$PWD/build_${config_name}/src/fuzzer"
+        )
+    done
     fuzzer_flags="-ll:util 2 -ll:cpu 3 $extra_flags"
 
     if [[ $mode = single ]]; then
@@ -52,12 +57,10 @@ function run_fuzzer_config {
     # Generate a random seed so we explore a novel part of the state space.
     seed="$(( 16#$(openssl rand -hex 4) * test_count ))"
 
-    FUZZER_EXE="$fuzzer_exe" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_GPUS_PER_TASK="$gpus_per_task" FUZZER_GPUS_PER_NODE="$gpus_per_node" FUZZER_EXTRA_FLAGS="$fuzzer_flags" FUZZER_BOOTSTRAP_DIR="$bootstrap_dir" sbatch --nodes=$nodes --partition=$partition "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
+    FUZZER_EXE="$(IFS=":"; echo "${fuzzer_exe[*]}")" FUZZER_MODE=$mode FUZZER_TEST_COUNT=$test_count FUZZER_SEED=$seed FUZZER_LAUNCHER="$launcher" FUZZER_GPUS_PER_TASK="$gpus_per_task" FUZZER_GPUS_PER_NODE="$gpus_per_node" FUZZER_EXTRA_FLAGS="$fuzzer_flags" FUZZER_BOOTSTRAP_DIR="$bootstrap_dir" sbatch --nodes=$nodes --partition=$partition "experiment/$FUZZER_MACHINE/sbatch_fuzzer.sh"
 }
 
-run_fuzzer_config      debug_single single all
-run_fuzzer_config    release_single single all
-run_fuzzer_config   debug_multi_gex  multi all
-run_fuzzer_config release_multi_gex  multi all
-run_fuzzer_config   debug_multi_ucx  multi all
-run_fuzzer_config release_multi_ucx  multi all
+run_fuzzer_config                          debug_single single all
+run_fuzzer_config                        release_single single all
+run_fuzzer_config     "debug_multi_gex:debug_multi_ucx"  multi all
+run_fuzzer_config "release_multi_gex:release_multi_ucx"  multi all

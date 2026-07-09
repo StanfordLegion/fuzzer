@@ -13,13 +13,19 @@ set -x
 launcher=
 
 fuzzer_flags=(
-    --fuzzer="$FUZZER_EXE"
     -j${FUZZER_THREADS:-4}
     -n${FUZZER_TEST_COUNT:-1000}
     -o${FUZZER_OP_COUNT:-256}
     -s${FUZZER_SEED:-0}
     --extra="$FUZZER_EXTRA_FLAGS"
 )
+
+IFS=":" read -ra fuzzer_exe <<< "$FUZZER_EXE"
+for f in "${fuzzer_exe[@]}"; do
+    fuzzer_flags+=(
+        --fuzzer="$f"
+    )
+done
 
 if [[ $FUZZER_MODE = single ]]; then
     launcher="$FUZZER_LAUNCHER"
