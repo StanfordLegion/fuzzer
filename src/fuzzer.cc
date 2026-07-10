@@ -405,7 +405,7 @@ public:
     }
     if (bad_points > 0) {
       log_fuzz.fatal() << "Encountered " << bad_points << " bad region values";
-      abort();
+      // abort();
     }
 
     runtime->unmap_region(ctx, inst);

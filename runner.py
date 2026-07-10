@@ -136,6 +136,12 @@ def run_spy(args, logfiles):
     return proc
 
 
+def grep_logs(args, logs, message):
+    cmd = ["rg", "-q", "-F", message]
+    cmd.extend(logs)
+    return subprocess.call(cmd) == 0
+
+
 def wrap_completed_process(proc, stdout, stderr):
     return CompletedProcess(
         args=proc.args,
@@ -269,6 +275,9 @@ def run_fuzzer(args):
             if spy_proc is not None:
                 return (proc, spy_proc)
         if log_dir is not None:
+            logs = glob.glob(os.path.join(log_dir, "out_*.log"))
+            if grep_logs(args, logs, "bad region values"):
+                return (proc, None)
             if args.launcher and not args.tmp_root_is_shared:
                 rm_proc = run_rm_rf(args, log_dir)
                 if rm_proc is not None:
