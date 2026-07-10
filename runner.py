@@ -53,8 +53,8 @@ class FuzzArgs:
 class CompletedProcess:
     args: list[str]
     returncode: int
-    stdout: str | bytes | None
-    stderr: str | bytes | None
+    stdout: bytes | None
+    stderr: bytes | None
 
 
 def prefix(args):
@@ -140,8 +140,8 @@ def wrap_completed_process(proc, stdout, stderr):
     return CompletedProcess(
         args=proc.args,
         returncode=proc.returncode,
-        stdout=proc.stdout,
-        stderr=proc.stderr,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
