@@ -44,10 +44,6 @@ enum ProjectionIDs {
 
 static Logger log_fuzz("fuzz");
 
-static RngSeed root_seed;
-static uint64_t replicate_levels = 0;
-static bool mapper_logging = false;
-
 static long long parse_long_long(const std::string &flag, const std::string &arg) {
   long long result;
   size_t consumed;
@@ -119,7 +115,7 @@ struct FuzzerConfig {
     return config;
   }
 
-  void log_config(Runtime *runtime, Context ctx) {
+  void log_config(Runtime *runtime, Context ctx) const {
     LOG_ONCE(log_fuzz.print() << "Fuzzer Configuration:");
     LOG_ONCE(log_fuzz.print() << "  config.initial_seed = " << initial_seed);
     LOG_ONCE(log_fuzz.print() << "  config.region_tree_depth = " << region_tree_depth);
@@ -139,7 +135,7 @@ struct FuzzerConfig {
 
 class OffsetProjection : public ProjectionFunctor {
 public:
-  OffsetProjection(uint64_t _offset) : offset(_offset) {}
+  explicit OffsetProjection(uint64_t _offset) : offset(_offset) {}
   bool is_functional(void) const override { return true; }
   bool is_invertible(void) const override { return false; }
   unsigned get_depth(void) const override { return 0; }
@@ -160,7 +156,7 @@ protected:
 
 class RandomProjection : public ProjectionFunctor {
 public:
-  RandomProjection(RngStream _stream) : stream(_stream) {}
+  explicit RandomProjection(RngStream _stream) : stream(_stream) {}
   bool is_functional(void) const override { return true; }
   bool is_invertible(void) const override { return false; }
   unsigned get_depth(void) const override { return 0; }
@@ -214,7 +210,8 @@ void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regi
 
 class RegionForest {
 public:
-  RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config, RngSeed &seed)
+  explicit RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config,
+                        RngSeed &seed)
       : runtime(_runtime), ctx(_ctx) {
     ispace = runtime->create_index_space<1>(
         ctx,
@@ -360,7 +357,7 @@ public:
     return true;
   }
 
-  void verify_contents() {
+  bool verify_contents() {
     std::vector<FieldID> fields;
     shadow_inst.get_fields(fields);
 
@@ -404,11 +401,12 @@ public:
       }
     }
     if (bad_points > 0) {
-      log_fuzz.fatal() << "Encountered " << bad_points << " bad region values";
-      abort();
+      log_fuzz.error() << "Encountered " << bad_points << " bad region values";
     }
 
     runtime->unmap_region(ctx, inst);
+
+    return bad_points == 0;
   }
 
 private:
@@ -528,7 +526,7 @@ const char *redop_name(ReductionOpID redop) {
 
 class RequirementBuilder {
 public:
-  RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
+  explicit RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config), forest(_forest) {}
 
   void build(RngStream &rng, bool launch_complete, bool requires_projection) {
@@ -739,7 +737,7 @@ using FutureCheck = std::pair<Future, uint64_t>;
 
 class OperationBuilder {
 public:
-  OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
+  explicit OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config),
         forest(_forest),
         launch_domain(Rect<1>::make_empty()),
@@ -1015,13 +1013,9 @@ private:
   uint64_t gpu_task_use_stream = 0;
 };
 
-void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Context ctx,
-               Runtime *runtime) {
-  InputArgs args = Runtime::get_input_args();
-  FuzzerConfig config = FuzzerConfig::parse_args(args.argc, args.argv);
+int top_level(const FuzzerConfig &config, RngSeed &&seed, Context ctx, Runtime *runtime) {
   config.log_config(runtime, ctx);
 
-  RngSeed seed = std::move(root_seed);
   RngStream rng = seed.make_stream();
 
   RegionForest forest(runtime, ctx, config, seed);
@@ -1040,42 +1034,32 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     }
   }
 
-  forest.verify_contents();
+  bool region_ok = forest.verify_contents();
 
+  bool future_ok = true;
   for (FutureCheck &check : futures) {
     uint64_t result = check.first.get_result<uint64_t>();
     uint64_t expected = check.second;
     if (result != expected) {
-      LOG_ONCE(log_fuzz.fatal()
+      LOG_ONCE(log_fuzz.error()
                << "Bad future: " << result << ", expected: " << expected);
-      abort();
+      future_ok = false;
     }
   }
-}
 
-static void create_mappers(Machine machine, Runtime *runtime,
-                           const std::set<Processor> &local_procs) {
-  for (Processor proc : local_procs) {
-    Mapping::Mapper *mapper =
-        new FuzzMapper::FuzzMapper(runtime->get_mapper_runtime(), machine, proc,
-                                   root_seed.make_stream(), replicate_levels);
-    if (mapper_logging) {
-      mapper = new Mapping::LoggingWrapper(mapper);
-    }
-    runtime->replace_default_mapper(mapper, proc);
+  if (!region_ok) {
+    return 1;
+  } else if (!future_ok) {
+    return 2;
+  } else {
+    return 0;
   }
-}
-
-void add_mapper_registration_callback(RngSeed &seed) {
-  Runtime::add_registration_callback(create_mappers);
 }
 
 int main(int argc, char **argv) {
   Runtime::initialize(&argc, &argv, true /* filter */);
   FuzzerConfig config = FuzzerConfig::parse_args(argc, argv);
-  root_seed = RngSeed(config.initial_seed);
-  replicate_levels = config.replicate_levels;
-  mapper_logging = config.mapper_logging;
+  RngSeed root_seed(config.initial_seed);
 
   Runtime::preregister_projection_functor(PROJECTION_OFFSET_1_ID,
                                           new OffsetProjection(1));
@@ -1083,14 +1067,6 @@ int main(int argc, char **argv) {
                                           new OffsetProjection(2));
   Runtime::preregister_projection_functor(PROJECTION_RANDOM_DEPTH_0_ID,
                                           new RandomProjection(root_seed.make_stream()));
-
-  Runtime::set_top_level_task_id(TOP_LEVEL_TASK_ID);
-  {
-    TaskVariantRegistrar registrar(TOP_LEVEL_TASK_ID, "CPU");
-    registrar.add_constraint(ProcessorConstraint(Processor::LOC_PROC));
-    registrar.set_replicable();
-    Runtime::preregister_task_variant<top_level>(registrar, "top_level");
-  }
 
   {
     TaskVariantRegistrar registrar(COLOR_POINTS_TASK_ID, "CPU");
@@ -1200,7 +1176,40 @@ int main(int argc, char **argv) {
         registrar, "uint64_replicable_inner");
   }
 
-  Runtime::add_registration_callback(create_mappers);
+  Runtime::add_registration_callback(
+      // Guaranteed to run before Runtime::start returns
+      [&](Machine machine, Runtime *runtime, const std::set<Processor> &local_procs) {
+        for (Processor proc : local_procs) {
+          Mapping::Mapper *mapper = new FuzzMapper::FuzzMapper(
+              runtime->get_mapper_runtime(), machine, proc, root_seed.make_stream(),
+              config.replicate_levels);
+          if (config.mapper_logging) {
+            mapper = new Mapping::LoggingWrapper(mapper);
+          }
+          runtime->replace_default_mapper(mapper, proc);
+        }
+      },
+      false /*dedup*/);
 
-  return Runtime::start(argc, argv);
+  int start_code = Runtime::start(argc, argv, true /*background*/);
+  if (start_code != 0) {
+    return start_code;
+  }
+
+  int top_level_code;
+  {
+    Runtime *runtime = Runtime::get_runtime();
+    Context ctx =
+        runtime->begin_implicit_task(TOP_LEVEL_TASK_ID, 0 /*default*/, Processor::NO_KIND,
+                                     nullptr, true /*control_replicable*/);
+    top_level_code = top_level(config, std::move(root_seed), ctx, runtime);
+    runtime->finish_implicit_task(ctx);
+  }
+
+  int shutdown_code = Runtime::wait_for_shutdown();
+  if (shutdown_code != 0) {
+    return shutdown_code;
+  }
+
+  return top_level_code;
 }
