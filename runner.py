@@ -428,7 +428,7 @@ def run_tests(
             result_queue.put(r)
 
         def error_callback(e):
-            print("ERROR CALLBACK", e)
+            print("ERROR CALLBACK", e, flush=True)
             raise e
 
         thread_pool.apply_async(
