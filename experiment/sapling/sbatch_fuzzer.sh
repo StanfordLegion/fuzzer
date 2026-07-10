@@ -6,6 +6,9 @@
 export REALM_SYNTHETIC_CORE_MAP=
 export REALM_BACKTRACE=1
 
+# UCX default spinlock is VERY slow under contention, switch to mutex
+export UCX_USE_MT_MUTEX=y
+
 ulimit -S -c 0 # disable core dumps
 
 set -x
