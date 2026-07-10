@@ -1013,6 +1013,16 @@ private:
   uint64_t gpu_task_use_stream = 0;
 };
 
+static bool consensus_match(Context ctx, Runtime *runtime, bool value) {
+  // Ensure we're encoding this in a consistent way.
+  int64_t input = value ? 1 : 0;
+  int64_t output = -1;
+  Future result = runtime->consensus_match(ctx, &input, &output, 1, sizeof(int64_t));
+  // Since we only provide a single input, a result size of 1 means they all
+  // matched.
+  return result.get_result<size_t>() == 1 && output == 1;
+}
+
 int top_level(const FuzzerConfig &config, RngSeed &&seed, Context ctx, Runtime *runtime) {
   config.log_config(runtime, ctx);
 
@@ -1046,6 +1056,9 @@ int top_level(const FuzzerConfig &config, RngSeed &&seed, Context ctx, Runtime *
       future_ok = false;
     }
   }
+
+  region_ok = consensus_match(ctx, runtime, region_ok);
+  future_ok = consensus_match(ctx, runtime, future_ok);
 
   if (!region_ok) {
     return 1;
