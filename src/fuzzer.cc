@@ -119,7 +119,7 @@ struct FuzzerConfig {
     return config;
   }
 
-  void log_config(Runtime *runtime, Context ctx) {
+  void log_config(Runtime *runtime, Context ctx) const {
     LOG_ONCE(log_fuzz.print() << "Fuzzer Configuration:");
     LOG_ONCE(log_fuzz.print() << "  config.initial_seed = " << initial_seed);
     LOG_ONCE(log_fuzz.print() << "  config.region_tree_depth = " << region_tree_depth);
@@ -139,7 +139,8 @@ struct FuzzerConfig {
 
 class OffsetProjection : public ProjectionFunctor {
 public:
-  OffsetProjection(uint64_t _offset) : offset(_offset) {}
+  OffsetProjection() = delete;
+  explicit OffsetProjection(uint64_t _offset) : offset(_offset) {}
   bool is_functional(void) const override { return true; }
   bool is_invertible(void) const override { return false; }
   unsigned get_depth(void) const override { return 0; }
@@ -160,7 +161,8 @@ protected:
 
 class RandomProjection : public ProjectionFunctor {
 public:
-  RandomProjection(RngStream _stream) : stream(_stream) {}
+  RandomProjection() = delete;
+  explicit RandomProjection(RngStream _stream) : stream(_stream) {}
   bool is_functional(void) const override { return true; }
   bool is_invertible(void) const override { return false; }
   unsigned get_depth(void) const override { return 0; }
@@ -214,7 +216,9 @@ void color_points_task(const Task *task, const std::vector<PhysicalRegion> &regi
 
 class RegionForest {
 public:
-  RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config, RngSeed &seed)
+  RegionForest() = delete;
+  explicit RegionForest(Runtime *_runtime, Context _ctx, const FuzzerConfig &config,
+                        RngSeed &seed)
       : runtime(_runtime), ctx(_ctx) {
     ispace = runtime->create_index_space<1>(
         ctx,
@@ -360,7 +364,7 @@ public:
     return true;
   }
 
-  void verify_contents() {
+  bool verify_contents() {
     std::vector<FieldID> fields;
     shadow_inst.get_fields(fields);
 
@@ -404,11 +408,12 @@ public:
       }
     }
     if (bad_points > 0) {
-      log_fuzz.fatal() << "Encountered " << bad_points << " bad region values";
-      abort();
+      log_fuzz.error() << "Encountered " << bad_points << " bad region values";
     }
 
     runtime->unmap_region(ctx, inst);
+
+    return bad_points == 0;
   }
 
 private:
@@ -528,7 +533,8 @@ const char *redop_name(ReductionOpID redop) {
 
 class RequirementBuilder {
 public:
-  RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
+  RequirementBuilder() = delete;
+  explicit RequirementBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config), forest(_forest) {}
 
   void build(RngStream &rng, bool launch_complete, bool requires_projection) {
@@ -739,7 +745,8 @@ using FutureCheck = std::pair<Future, uint64_t>;
 
 class OperationBuilder {
 public:
-  OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
+  OperationBuilder() = delete;
+  explicit OperationBuilder(const FuzzerConfig &_config, RegionForest &_forest)
       : config(_config),
         forest(_forest),
         launch_domain(Rect<1>::make_empty()),
@@ -1040,16 +1047,22 @@ void top_level(const Task *task, const std::vector<PhysicalRegion> &regions, Con
     }
   }
 
-  forest.verify_contents();
+  bool region_ok = forest.verify_contents();
 
+  bool future_ok = true;
   for (FutureCheck &check : futures) {
     uint64_t result = check.first.get_result<uint64_t>();
     uint64_t expected = check.second;
     if (result != expected) {
-      LOG_ONCE(log_fuzz.fatal()
-               << "Bad future: " << result << ", expected: " << expected);
-      abort();
+      log_fuzz.error() << "Bad future: " << result << ", expected: " << expected;
+      future_ok = false;
     }
+  }
+
+  if (!region_ok) {
+    Runtime::set_return_code(1);
+  } else if (!future_ok) {
+    Runtime::set_return_code(2);
   }
 }
 
