@@ -9,6 +9,9 @@ export REALM_BACKTRACE=1
 # UCX default spinlock is VERY slow under contention, switch to mutex
 export UCX_USE_MT_MUTEX=y
 
+# workaround for https://github.com/StanfordLegion/realm/issues/483
+export GASNET_EXITTIMEOUT_MIN=30
+
 ulimit -S -c 0 # disable core dumps
 
 set -x

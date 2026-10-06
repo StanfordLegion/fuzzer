@@ -6,4 +6,4 @@ export FUZZER_USE_CUDA=0
 
 # module load cuda
 
-export CC=gcc CXX=g++
+export CC=gcc-10 CXX=g++-10
