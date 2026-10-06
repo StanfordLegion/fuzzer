@@ -708,9 +708,9 @@ public:
   void display(Runtime *runtime, Context ctx) const {
     {
       Realm::LoggerMessage msg = log_fuzz.info();
-      msg = msg << "  Fields:";
+      msg << "  Fields:";
       for (FieldID field : fields) {
-        msg = msg << " " << field;
+        msg << " " << field;
       }
       LOG_ONCE(msg);
     }
