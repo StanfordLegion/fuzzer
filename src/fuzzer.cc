@@ -226,22 +226,30 @@ public:
                 Point<1>(config.region_tree_width * config.region_tree_size_factor - 1)));
 
     fspace = runtime->create_field_space(ctx);
-    FieldAllocator falloc = runtime->create_field_allocator(ctx, fspace);
     uint64_t num_fields = config.region_tree_num_fields;
     uint64_t branch_factor = config.region_tree_branch_factor;
     {
+      FieldAllocator falloc = runtime->create_field_allocator(ctx, fspace);
       FieldID fid = 0;
       for (uint64_t field = 0; field < num_fields; ++field) {
         falloc.allocate_field(sizeof(int64_t), fid++);
       }
+    }
+    root = runtime->create_logical_region(ctx, ispace, fspace);
+    shadow_root = runtime->create_logical_region(ctx, ispace, fspace);
+
+    // Create a temporary tree for coloring.
+    FieldSpace color_fspace = runtime->create_field_space(ctx);
+    {
+      FieldAllocator falloc = runtime->create_field_allocator(ctx, color_fspace);
+      FieldID fid = 0;
       for (uint64_t num_colors = 1; num_colors < branch_factor; ++num_colors) {
         for (uint64_t color = 0; color < num_colors; ++color) {
           falloc.allocate_field(sizeof(Point<1>), fid++);
         }
       }
     }
-    root = runtime->create_logical_region(ctx, ispace, fspace);
-    shadow_root = runtime->create_logical_region(ctx, ispace, fspace);
+    LogicalRegion color_root = runtime->create_logical_region(ctx, ispace, color_fspace);
 
     color_space = runtime->create_index_space<1>(
         ctx, Rect<1>(Point<1>(0), Point<1>(config.region_tree_width - 1)));
@@ -252,19 +260,19 @@ public:
 
     // After this we make progressive colored regions.
     {
-      FieldID fid = num_fields;
+      FieldID fid = 0;
       for (uint64_t num_colors = 1; num_colors < branch_factor; ++num_colors) {
         std::vector<FieldID> colors;
         for (uint64_t color = 0; color < num_colors; ++color) {
           colors.push_back(fid++);
         }
 
-        color_points(colors, config, seed);
+        color_points(color_root, colors, config, seed);
 
         std::vector<IndexPartition> color_parts;
         for (FieldID color : colors) {
-          color_parts.push_back(
-              runtime->create_partition_by_field(ctx, root, root, color, color_space));
+          color_parts.push_back(runtime->create_partition_by_field(
+              ctx, color_root, color_root, color, color_space));
         }
 
         if (color_parts.size() == 1) {
@@ -281,13 +289,11 @@ public:
           }
           aliased_partitions.push_back(part);
         }
-
-        // FIXME: https://github.com/StanfordLegion/legion/issues/1666
-        // for (FieldID color : colors) {
-        //   falloc.free_field(color);
-        // }
       }
     }
+
+    runtime->destroy_field_space(ctx, color_fspace);
+    runtime->destroy_logical_region(ctx, color_root);
 
     // Initialize everything so we don't get unitialized read warnings
     for (uint64_t field = 0; field < config.region_tree_num_fields; ++field) {
@@ -417,13 +423,13 @@ public:
   }
 
 private:
-  void color_points(const std::vector<FieldID> &colors, const FuzzerConfig &config,
-                    RngSeed &seed) {
+  void color_points(LogicalRegion color_root, const std::vector<FieldID> &colors,
+                    const FuzzerConfig &config, RngSeed &seed) {
     ColorPointsArgs args(seed.make_stream(), config.region_tree_width);
     TaskLauncher launcher(COLOR_POINTS_TASK_ID, TaskArgument(&args, sizeof(args)));
     launcher.add_region_requirement(
-        RegionRequirement(root, std::set<FieldID>(colors.begin(), colors.end()), colors,
-                          LEGION_WRITE_DISCARD, LEGION_EXCLUSIVE, root));
+        RegionRequirement(color_root, std::set<FieldID>(colors.begin(), colors.end()),
+                          colors, LEGION_WRITE_DISCARD, LEGION_EXCLUSIVE, color_root));
     launcher.elide_future_return = true;
     runtime->execute_task(ctx, launcher);
   }
