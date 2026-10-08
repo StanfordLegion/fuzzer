@@ -81,6 +81,9 @@ if [[ $FUZZER_USE_CUDA -eq 1 ]]; then
 fi
 cmake "${fuzzer_flags[@]}" ..
 make -j${FUZZER_THREADS:-4}
+if [[ $(uname) = Linux ]]; then
+  ctest -R sidecar --output-on-failure
+fi
 popd
 
 export REALM_SYNTHETIC_CORE_MAP=

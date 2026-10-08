@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.21 FATAL_ERROR)
 project(LegionFuzzer)
 
 find_package(Legion REQUIRED)
+find_package(Threads REQUIRED)
 
 include(GNUInstallDirs)
 
@@ -17,3 +18,8 @@ set(CMAKE_HIP_FLAGS_RELWITHDEBINFO "-O2 -g")
 enable_testing()
 
 add_subdirectory(src)
+
+# The shims are x86-64 Linux only (signal handling, ptrace registers, futex).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+  add_subdirectory(sidecar)
+endif()
