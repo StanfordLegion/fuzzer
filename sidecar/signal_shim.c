@@ -69,7 +69,8 @@
  * child without exec runs with the shim disabled; futex interception only sees
  * explicit syscall(SYS_futex, FUTEX_WAKE...) calls, not libc-internal ones.
  *
- * Build: cc -O2 -shared -fPIC -Wl,-z,now -o signal_shim.so signal_shim.c -ldl -lpthread -lm
+ * Build: cc -O2 -shared -fPIC -Wl,-z,now -o signal_shim.so signal_shim.c -ldl -lpthread
+ * -lm
  */
 
 #define _GNU_SOURCE
@@ -147,10 +148,9 @@ static struct {
 } slots[NUM_SLOTS];
 
 /* Stateless RNG: safe in signal handlers and needs no TLS. */
-static uint64_t rand64(void)
-{
-  uint64_t z = cfg_seed + __atomic_add_fetch(&rng_counter, 0x9e3779b97f4a7c15ULL,
-                                             __ATOMIC_RELAXED);
+static uint64_t rand64(void) {
+  uint64_t z = cfg_seed +
+               __atomic_add_fetch(&rng_counter, 0x9e3779b97f4a7c15ULL, __ATOMIC_RELAXED);
   z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
   z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
   return z ^ (z >> 31);
@@ -158,32 +158,25 @@ static uint64_t rand64(void)
 
 static double rand01(void) { return (rand64() >> 11) * (1.0 / 9007199254740992.0); }
 
-static int64_t now_ns(void)
-{
+static int64_t now_ns(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-static void sleep_ns(int64_t ns)
-{
-  if(ns < 1)
-    ns = 1;
+static void sleep_ns(int64_t ns) {
+  if (ns < 1) ns = 1;
   struct timespec ts = {ns / 1000000000LL, ns % 1000000000LL};
-  while(nanosleep(&ts, &ts) == -1 && errno == EINTR) {
+  while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {
   }
 }
 
 /* log-uniform in [1, max_us] microseconds; not for use in the handler */
-static unsigned random_us(unsigned max_us)
-{
-  if(max_us <= 1)
-    return 1;
+static unsigned random_us(unsigned max_us) {
+  if (max_us <= 1) return 1;
   double us = exp(rand01() * log((double)max_us));
-  if(us < 1)
-    us = 1;
-  if(us > max_us)
-    us = max_us;
+  if (us < 1) us = 1;
+  if (us > max_us) us = max_us;
   return (unsigned)us;
 }
 
@@ -191,40 +184,38 @@ static unsigned random_us(unsigned max_us)
  * instruction bytes with process_vm_readv, which reports EFAULT instead of
  * faulting if they are not readable. Heuristic: a pc next to a syscall
  * instruction does not prove the thread was blocked in it. */
-static int classify_syscall(uint64_t rip)
-{
+static int classify_syscall(uint64_t rip) {
   unsigned char bytes[4];
   struct iovec local = {bytes, sizeof(bytes)};
   struct iovec remote = {(void *)(uintptr_t)(rip - 2), sizeof(bytes)};
   long n = shim_real_syscall(SYS_process_vm_readv, (long)getpid(), (long)&local, 1L,
                              (long)&remote, 1L, 0L);
-  if(n != (long)sizeof(bytes))
-    return -1;
+  if (n != (long)sizeof(bytes)) return -1;
   /* syscall is 0f 05: just before rip, or at rip if rewound for restart */
-  return ((bytes[0] == 0x0f && bytes[1] == 0x05) || (bytes[2] == 0x0f && bytes[3] == 0x05))
+  return ((bytes[0] == 0x0f && bytes[1] == 0x05) ||
+          (bytes[2] == 0x0f && bytes[3] == 0x05))
              ? 1
              : 0;
 }
 
-static void pause_handler(int sig, siginfo_t *info, void *ctx)
-{
+static void pause_handler(int sig, siginfo_t *info, void *ctx) {
   (void)sig;
   int saved = errno;
   int64_t t1 = now_ns();
-  if(info->si_code != SI_QUEUE || info->si_pid != getpid()) {
+  if (info->si_code != SI_QUEUE || info->si_pid != getpid()) {
     errno = saved;
     return;
   }
   uint64_t v = (uint64_t)(uintptr_t)info->si_value.sival_ptr;
   unsigned i = v & 0xffff;
   uint32_t gen = (uint32_t)(v >> 16);
-  if(i >= NUM_SLOTS) {
+  if (i >= NUM_SLOTS) {
     errno = saved;
     return;
   }
   uint32_t expected = WORD(gen, SLOT_SENT);
-  if(!__atomic_compare_exchange_n(&slots[i].word, &expected, WORD(gen, SLOT_ENTERED), 0,
-                                  __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+  if (!__atomic_compare_exchange_n(&slots[i].word, &expected, WORD(gen, SLOT_ENTERED), 0,
+                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
     /* abandoned or reused request */
     __atomic_add_fetch(&counts.stale, 1, __ATOMIC_RELAXED);
     errno = saved;
@@ -236,7 +227,7 @@ static void pause_handler(int sig, siginfo_t *info, void *ctx)
   slots[i].rip = rip;
   slots[i].in_syscall = classify_syscall(rip);
   shim_real_syscall(SYS_futex, (long)&slots[i].word, (long)FUTEX_WAKE, 1L, 0L, 0L, 0L);
-  if(cfg_yield)
+  if (cfg_yield)
     sched_yield();
   else
     sleep_ns(slots[i].hold_ns);
@@ -257,15 +248,14 @@ static struct {
   double util;
 } util_table[65536];
 
-static double update_util(pid_t tid, int64_t busy_ns, int64_t now)
-{
+static double update_util(pid_t tid, int64_t busy_ns, int64_t now) {
   int i = tid & 0xffff;
-  if(util_table[i].tid != tid) {
+  if (util_table[i].tid != tid) {
     util_table[i].tid = tid;
     util_table[i].start_ns = now;
     util_table[i].start_busy_ns = busy_ns;
     util_table[i].util = 0;
-  } else if(now - util_table[i].start_ns >= UTIL_WINDOW_NS) {
+  } else if (now - util_table[i].start_ns >= UTIL_WINDOW_NS) {
     util_table[i].util =
         (double)(busy_ns - util_table[i].start_busy_ns) / (now - util_table[i].start_ns);
     util_table[i].start_ns = now;
@@ -274,34 +264,28 @@ static double update_util(pid_t tid, int64_t busy_ns, int64_t now)
   return util_table[i].util;
 }
 
-static ssize_t read_file(const char *path, char *buf, size_t size)
-{
+static ssize_t read_file(const char *path, char *buf, size_t size) {
   int fd = open(path, O_RDONLY);
-  if(fd < 0)
-    return -1;
+  if (fd < 0) return -1;
   ssize_t len = read(fd, buf, size - 1);
   close(fd);
-  if(len >= 0)
-    buf[len] = 0;
+  if (len >= 0) buf[len] = 0;
   return len;
 }
 
 /* Returns candidate threads; *total gets the number of live (non-zombie)
  * threads other than the helper, or -1 if the thread list could not be read. */
-static int list_threads(pid_t *tids, int max, int *total)
-{
+static int list_threads(pid_t *tids, int max, int *total) {
   DIR *d = opendir("/proc/self/task");
   *total = -1;
-  if(!d)
-    return 0;
+  if (!d) return 0;
   *total = 0;
   int n = 0;
   int64_t now = now_ns();
   struct dirent *e;
-  while((e = readdir(d)) && n < max) {
+  while ((e = readdir(d)) && n < max) {
     pid_t tid = atoi(e->d_name);
-    if(tid <= 0 || tid == helper_tid)
-      continue;
+    if (tid <= 0 || tid == helper_tid) continue;
     /* Everything read from /proc is advisory: the thread can change state or
      * exit right after we look. Only a positively read zombie/dead state
      * makes a thread not count as live (this count decides whether the
@@ -310,22 +294,20 @@ static int list_threads(pid_t *tids, int max, int *total)
     char path[64], buf[1024];
     snprintf(path, sizeof(path), "/proc/self/task/%d/stat", tid);
     char *p = NULL;
-    if(read_file(path, buf, sizeof(buf)) > 0) {
+    if (read_file(path, buf, sizeof(buf)) > 0) {
       p = strrchr(buf, ')');
-      if(p && (p[1] != ' ' || p[2] == 0))
-        p = NULL;
+      if (p && (p[1] != ' ' || p[2] == 0)) p = NULL;
     }
-    if(p && (p[2] == 'Z' || p[2] == 'X'))
+    if (p && (p[2] == 'Z' || p[2] == 'X'))
       continue; /* exited (e.g. a main thread that called pthread_exit) */
     (*total)++;
-    if(!p || (cfg_runnable && p[2] != 'R'))
-      continue;
-    if(cfg_spinners > 0) {
+    if (!p || (cfg_runnable && p[2] != 'R')) continue;
+    if (cfg_spinners > 0) {
       long long run = 0, wait = 0;
       snprintf(path, sizeof(path), "/proc/self/task/%d/schedstat", tid);
-      if(read_file(path, buf, sizeof(buf)) > 0 &&
-         sscanf(buf, "%lld %lld", &run, &wait) == 2 &&
-         update_util(tid, run + wait, now) >= cfg_spinners)
+      if (read_file(path, buf, sizeof(buf)) > 0 &&
+          sscanf(buf, "%lld %lld", &run, &wait) == 2 &&
+          update_util(tid, run + wait, now) >= cfg_spinners)
         continue;
     }
     tids[n++] = tid;
@@ -334,20 +316,17 @@ static int list_threads(pid_t *tids, int max, int *total)
   return n;
 }
 
-static void copy_maps(void)
-{
+static void copy_maps(void) {
   char dst[1400], host[256] = "unknown", buf[65536];
   gethostname(host, sizeof(host));
   snprintf(dst, sizeof(dst), "%s/maps-%s-%d.log", cfg_log, host, getpid());
   int in = open("/proc/self/maps", O_RDONLY);
-  if(in < 0)
-    return;
+  if (in < 0) return;
   int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  if(out >= 0) {
+  if (out >= 0) {
     ssize_t n;
-    while((n = read(in, buf, sizeof(buf))) > 0)
-      if(write(out, buf, n) != n)
-        break;
+    while ((n = read(in, buf, sizeof(buf))) > 0)
+      if (write(out, buf, n) != n) break;
     close(out);
   }
   close(in);
@@ -357,13 +336,12 @@ static FILE *pause_log;
 
 /* Log and free finished requests; abandon requests never delivered. Only the
  * helper thread calls this. */
-static void collect_slots(void)
-{
+static void collect_slots(void) {
   int64_t now = now_ns();
-  for(int i = 0; i < NUM_SLOTS; i++) {
+  for (int i = 0; i < NUM_SLOTS; i++) {
     uint32_t w = __atomic_load_n(&slots[i].word, __ATOMIC_ACQUIRE);
-    if(WORD_STATE(w) == SLOT_DONE) {
-      if(pause_log)
+    if (WORD_STATE(w) == SLOT_DONE) {
+      if (pause_log)
         /* same columns as ptrace_shim: tid t0 t1 t2 t3 rip orig_rax, where
          * t3 (resume) is the handler exit and orig_rax is 0 for a syscall,
          * -1 for user code, and -2 if unknown */
@@ -373,32 +351,28 @@ static void collect_slots(void)
                 slots[i].in_syscall == 1 ? 0 : (slots[i].in_syscall == 0 ? -1 : -2));
       __atomic_add_fetch(&counts.done, 1, __ATOMIC_RELAXED);
       __atomic_store_n(&slots[i].word, WORD(WORD_GEN(w), SLOT_FREE), __ATOMIC_RELEASE);
-    } else if(WORD_STATE(w) == SLOT_SENT && now - slots[i].t0 >= cfg_abandon_ns) {
+    } else if (WORD_STATE(w) == SLOT_SENT && now - slots[i].t0 >= cfg_abandon_ns) {
       uint32_t expected = w;
-      if(__atomic_compare_exchange_n(&slots[i].word, &expected,
-                                     WORD(WORD_GEN(w), SLOT_FREE), 0, __ATOMIC_ACQ_REL,
-                                     __ATOMIC_ACQUIRE))
+      if (__atomic_compare_exchange_n(&slots[i].word, &expected,
+                                      WORD(WORD_GEN(w), SLOT_FREE), 0, __ATOMIC_ACQ_REL,
+                                      __ATOMIC_ACQUIRE))
         __atomic_add_fetch(&counts.abandoned, 1, __ATOMIC_RELAXED);
     }
   }
-  if(pause_log)
-    fflush(pause_log);
+  if (pause_log) fflush(pause_log);
 }
 
 /* Called with the result of a thread scan: if only the helper is left, the
  * program has finished (all its threads called pthread_exit), and glibc would
  * have called exit(0); do that rather than keep the process alive. */
-static void exit_if_alone(int total, int *lonely)
-{
-  if(total == 0) {
-    if(++*lonely >= 2)
-      exit(0);
+static void exit_if_alone(int total, int *lonely) {
+  if (total == 0) {
+    if (++*lonely >= 2) exit(0);
   } else
     *lonely = 0;
 }
 
-static void *helper_main(void *arg)
-{
+static void *helper_main(void *arg) {
   (void)arg;
   helper_tid = shim_real_syscall(SYS_gettid);
   pid_t pid = getpid();
@@ -406,15 +380,14 @@ static void *helper_main(void *arg)
   int total = 0;
 
   int alone = 0;
-  for(;;) {
+  for (;;) {
     list_threads(tids, MAX_THREADS, &total);
-    if(total >= cfg_warmup)
-      break;
+    if (total >= cfg_warmup) break;
     exit_if_alone(total, &alone);
     sleep_ns(1000000);
   }
 
-  if(cfg_log[0]) {
+  if (cfg_log[0]) {
     char path[1400], host[256] = "unknown";
     gethostname(host, sizeof(host));
     snprintf(path, sizeof(path), "%s/pauses-%s-%d.log", cfg_log, host, pid);
@@ -424,17 +397,17 @@ static void *helper_main(void *arg)
 
   unsigned next = 0;
   int lonely = 0;
-  for(;;) {
+  for (;;) {
     collect_slots();
     /* stop if the program has taken over the signal */
     {
       struct sigaction cur;
-      if(sigaction(pause_signal, NULL, &cur) != 0 || !(cur.sa_flags & SA_SIGINFO) ||
-         cur.sa_sigaction != pause_handler) {
+      if (sigaction(pause_signal, NULL, &cur) != 0 || !(cur.sa_flags & SA_SIGINFO) ||
+          cur.sa_sigaction != pause_handler) {
         __atomic_store_n(&counts.handler_replaced, 1, __ATOMIC_RELAXED);
         fprintf(stderr, "SIGNAL_SHIM: signal %d handler was replaced; pausing stopped\n",
                 pause_signal);
-        for(;;) {
+        for (;;) {
           collect_slots();
           sleep_ns(100000000);
         }
@@ -444,21 +417,20 @@ static void *helper_main(void *arg)
     sleep_ns((int64_t)(-log1p(-rand01()) / cfg_rate * 1e9));
     int n = list_threads(tids, MAX_THREADS, &total);
     exit_if_alone(total, &lonely);
-    if(n == 0)
-      continue;
+    if (n == 0) continue;
 
     /* find a free slot */
     int i = -1;
     uint32_t w = 0;
-    for(unsigned k = 0; k < NUM_SLOTS; k++) {
+    for (unsigned k = 0; k < NUM_SLOTS; k++) {
       unsigned j = (next + k) % NUM_SLOTS;
       w = __atomic_load_n(&slots[j].word, __ATOMIC_ACQUIRE);
-      if(WORD_STATE(w) == SLOT_FREE) {
+      if (WORD_STATE(w) == SLOT_FREE) {
         i = j;
         break;
       }
     }
-    if(i < 0) {
+    if (i < 0) {
       __atomic_add_fetch(&counts.ring_full, 1, __ATOMIC_RELAXED);
       continue;
     }
@@ -478,8 +450,8 @@ static void *helper_main(void *arg)
     si.si_pid = pid;
     si.si_uid = getuid();
     si.si_value.sival_ptr = (void *)(uintptr_t)(((uint64_t)gen << 16) | (unsigned)i);
-    if(shim_real_syscall(SYS_rt_tgsigqueueinfo, (long)pid, (long)tid, (long)pause_signal,
-                         (long)&si) != 0) {
+    if (shim_real_syscall(SYS_rt_tgsigqueueinfo, (long)pid, (long)tid, (long)pause_signal,
+                          (long)&si) != 0) {
       /* thread gone (ESRCH) or signal queue full (EAGAIN): no handler will
        * run for this generation, so the slot can be freed */
       __atomic_add_fetch(&counts.send_failed, 1, __ATOMIC_RELAXED);
@@ -490,15 +462,12 @@ static void *helper_main(void *arg)
     /* wait until the target has been interrupted (or the abandon timeout,
      * after which collect_slots gives up on it) */
     int64_t deadline = slots[i].t0 + cfg_abandon_ns;
-    for(;;) {
+    for (;;) {
       uint32_t cur = __atomic_load_n(&slots[i].word, __ATOMIC_ACQUIRE);
-      if(cur != WORD(gen, SLOT_SENT))
-        break;
+      if (cur != WORD(gen, SLOT_SENT)) break;
       int64_t left = deadline - now_ns();
-      if(left <= 0)
-        break;
-      if(left > 10000000)
-        left = 10000000;
+      if (left <= 0) break;
+      if (left > 10000000) left = 10000000;
       struct timespec timeout = {0, left};
       shim_real_syscall(SYS_futex, (long)&slots[i].word, (long)FUTEX_WAIT, (long)cur,
                         (long)&timeout, 0L, 0L);
@@ -519,68 +488,61 @@ _Static_assert(SYS_futex == 202, "trampoline assumes SYS_futex == 202");
 _Static_assert(FUTEX_WAKE == 1, "trampoline assumes FUTEX_WAKE == 1");
 _Static_assert(FUTEX_CMD_MASK == -385, "trampoline assumes FUTEX_CMD_MASK == ~0x180");
 
-__asm__(".pushsection .text\n"
-        ".globl syscall\n"
-        ".type syscall, @function\n"
-        "syscall:\n"
-        "  cmpq $202, %rdi\n"         /* SYS_futex */
-        "  jne 1f\n"
-        "  movl %edx, %eax\n"
-        "  andl $-385, %eax\n"        /* FUTEX_CMD_MASK = ~(PRIVATE | CLOCK_REALTIME) */
-        "  cmpl $1, %eax\n"           /* FUTEX_WAKE */
-        "  jne 1f\n"
-        "  jmp shim_futex_wake_hook\n"
-        "1:\n"
-        "  cmpq $0, shim_real_syscall(%rip)\n"
-        "  jne 2f\n"
-        /* not resolved yet (called before our constructor): resolve while
-         * preserving the argument registers; 6 pushes + 8 keeps alignment */
-        "  pushq %rdi\n  pushq %rsi\n  pushq %rdx\n  pushq %rcx\n  pushq %r8\n  pushq %r9\n"
-        "  subq $8, %rsp\n"
-        "  call shim_resolve_real_syscall\n"
-        "  addq $8, %rsp\n"
-        "  popq %r9\n  popq %r8\n  popq %rcx\n  popq %rdx\n  popq %rsi\n  popq %rdi\n"
-        "2:\n"
-        "  jmp *shim_real_syscall(%rip)\n"
-        ".size syscall, .-syscall\n"
-        ".popsection\n");
+__asm__(
+    ".pushsection .text\n"
+    ".globl syscall\n"
+    ".type syscall, @function\n"
+    "syscall:\n"
+    "  cmpq $202, %rdi\n" /* SYS_futex */
+    "  jne 1f\n"
+    "  movl %edx, %eax\n"
+    "  andl $-385, %eax\n" /* FUTEX_CMD_MASK = ~(PRIVATE | CLOCK_REALTIME) */
+    "  cmpl $1, %eax\n"    /* FUTEX_WAKE */
+    "  jne 1f\n"
+    "  jmp shim_futex_wake_hook\n"
+    "1:\n"
+    "  cmpq $0, shim_real_syscall(%rip)\n"
+    "  jne 2f\n"
+    /* not resolved yet (called before our constructor): resolve while
+     * preserving the argument registers; 6 pushes + 8 keeps alignment */
+    "  pushq %rdi\n  pushq %rsi\n  pushq %rdx\n  pushq %rcx\n  pushq %r8\n  pushq %r9\n"
+    "  subq $8, %rsp\n"
+    "  call shim_resolve_real_syscall\n"
+    "  addq $8, %rsp\n"
+    "  popq %r9\n  popq %r8\n  popq %rcx\n  popq %rdx\n  popq %rsi\n  popq %rdi\n"
+    "2:\n"
+    "  jmp *shim_real_syscall(%rip)\n"
+    ".size syscall, .-syscall\n"
+    ".popsection\n");
 
-void shim_resolve_real_syscall(void)
-{
-  if(!shim_real_syscall)
-    shim_real_syscall = (syscall_fn)dlsym(RTLD_NEXT, "syscall");
-  if(!shim_real_syscall)
-    abort();
+void shim_resolve_real_syscall(void) {
+  if (!shim_real_syscall) shim_real_syscall = (syscall_fn)dlsym(RTLD_NEXT, "syscall");
+  if (!shim_real_syscall) abort();
 }
 
-long shim_futex_wake_hook(long number, long uaddr, long op, long val)
-{
+long shim_futex_wake_hook(long number, long uaddr, long op, long val) {
   int saved = errno;
-  if(!shim_real_syscall)
-    shim_resolve_real_syscall();
-  if(cfg_futex > 0 && rand01() < cfg_futex)
+  if (!shim_real_syscall) shim_resolve_real_syscall();
+  if (cfg_futex > 0 && rand01() < cfg_futex)
     sleep_ns((int64_t)random_us(cfg_pause_us) * 1000); /* delay the waker */
   errno = saved;
   long ret = shim_real_syscall(number, uaddr, op, val);
   int after = errno;
-  if(cfg_futex > 0 && rand01() < cfg_futex)
+  if (cfg_futex > 0 && rand01() < cfg_futex)
     sched_yield(); /* let the wakee run ahead of the waker */
   errno = after;
   return ret;
 }
 
-static void disable_in_child(void)
-{
+static void disable_in_child(void) {
   /* the helper thread does not survive fork; keep the child unperturbed */
   cfg_rate = 0;
   cfg_futex = 0;
   helper_tid = 0;
 }
 
-static void report_summary(void)
-{
-  if(cfg_rate <= 0 || helper_tid == 0)
-    return;
+static void report_summary(void) {
+  if (cfg_rate <= 0 || helper_tid == 0) return;
   char line[512];
   snprintf(line, sizeof(line),
            "signal_shim: pid=%d seed=0x%016llx sent=%ld done=%ld abandoned=%ld "
@@ -594,13 +556,13 @@ static void report_summary(void)
            __atomic_load_n(&counts.ring_full, __ATOMIC_RELAXED),
            __atomic_load_n(&counts.handler_replaced, __ATOMIC_RELAXED));
   FILE *f = NULL;
-  if(cfg_log[0]) {
+  if (cfg_log[0]) {
     char path[1400], host[256] = "unknown";
     gethostname(host, sizeof(host));
     snprintf(path, sizeof(path), "%s/summary-%s-%d.txt", cfg_log, host, getpid());
     f = fopen(path, "w");
   }
-  if(f) {
+  if (f) {
     fputs(line, f);
     fclose(f);
   } else
@@ -608,12 +570,11 @@ static void report_summary(void)
 }
 
 /* Same seeding as ptrace_shim: the given seed, or 64 random bits. */
-static int parse_seed(const char *val, uint64_t *out)
-{
+static int parse_seed(const char *val, uint64_t *out) {
   char *end;
   errno = 0;
   unsigned long long v = strtoull(val, &end, 0);
-  if(end == val || *end || errno || *val == '-') {
+  if (end == val || *end || errno || *val == '-') {
     fprintf(stderr, "SIGNAL_SHIM: invalid seed=%s\n", val);
     return 0;
   }
@@ -621,37 +582,36 @@ static int parse_seed(const char *val, uint64_t *out)
   return 1;
 }
 
-static uint64_t random_seed(void)
-{
+static uint64_t random_seed(void) {
   uint64_t seed;
-  if(getrandom(&seed, sizeof(seed), 0) != (ssize_t)sizeof(seed))
+  if (getrandom(&seed, sizeof(seed), 0) != (ssize_t)sizeof(seed))
     seed = (uint64_t)now_ns() ^ ((uint64_t)getpid() << 32);
   return seed;
 }
 
-static int parse_double(const char *key, const char *val, double lo, double hi, double *out)
-{
+static int parse_double(const char *key, const char *val, double lo, double hi,
+                        double *out) {
   char *end;
   double d = strtod(val, &end);
-  if(end == val || *end || !isfinite(d) || d < lo || d > hi) {
-    fprintf(stderr, "SIGNAL_SHIM: invalid %s=%s (must be in [%g, %g])\n", key, val, lo, hi);
+  if (end == val || *end || !isfinite(d) || d < lo || d > hi) {
+    fprintf(stderr, "SIGNAL_SHIM: invalid %s=%s (must be in [%g, %g])\n", key, val, lo,
+            hi);
     return 0;
   }
   *out = d;
   return 1;
 }
 
-__attribute__((constructor)) static void signal_shim_init(void)
-{
+__attribute__((constructor)) static void signal_shim_init(void) {
   shim_resolve_real_syscall();
   const char *env = getenv("SIGNAL_SHIM");
-  if(!env)
-    env = ""; /* all defaults */
+  if (!env) env = ""; /* all defaults */
   char *copy = strdup(env), *saveptr = NULL;
   int ok = 1, have_seed = 0;
-  for(char *tok = strtok_r(copy, ",", &saveptr); tok; tok = strtok_r(NULL, ",", &saveptr)) {
+  for (char *tok = strtok_r(copy, ",", &saveptr); tok;
+       tok = strtok_r(NULL, ",", &saveptr)) {
     char *eq = strchr(tok, '=');
-    if(!eq) {
+    if (!eq) {
       fprintf(stderr, "SIGNAL_SHIM: malformed entry '%s'\n", tok);
       ok = 0;
       continue;
@@ -659,43 +619,37 @@ __attribute__((constructor)) static void signal_shim_init(void)
     *eq = 0;
     const char *val = eq + 1;
     double d = 0;
-    if(!strcmp(tok, "rate"))
+    if (!strcmp(tok, "rate"))
       ok &= parse_double(tok, val, 0, 1e6, &cfg_rate);
-    else if(!strcmp(tok, "hold")) {
-      if((ok &= parse_double(tok, val, 0, MAX_HOLD_US, &d)))
-        cfg_hold_us = (unsigned)d;
-    } else if(!strcmp(tok, "maxhold")) {
-      if((ok &= parse_double(tok, val, 1, MAX_HOLD_US, &d)))
+    else if (!strcmp(tok, "hold")) {
+      if ((ok &= parse_double(tok, val, 0, MAX_HOLD_US, &d))) cfg_hold_us = (unsigned)d;
+    } else if (!strcmp(tok, "maxhold")) {
+      if ((ok &= parse_double(tok, val, 1, MAX_HOLD_US, &d)))
         cfg_maxhold_us = (unsigned)d;
-    } else if(!strcmp(tok, "mode")) {
-      if(!strcmp(val, "yield"))
+    } else if (!strcmp(tok, "mode")) {
+      if (!strcmp(val, "yield"))
         cfg_yield = 1;
-      else if(!strcmp(val, "sleep"))
+      else if (!strcmp(val, "sleep"))
         cfg_yield = 0;
       else {
         fprintf(stderr, "SIGNAL_SHIM: invalid mode=%s\n", val);
         ok = 0;
       }
-    } else if(!strcmp(tok, "runnable")) {
-      if((ok &= parse_double(tok, val, 0, 1, &d)))
-        cfg_runnable = (int)d;
-    } else if(!strcmp(tok, "spinners")) {
-      if((ok &= parse_double(tok, val, 0, 100, &d)))
-        cfg_spinners = d / 100.0;
-    } else if(!strcmp(tok, "futex_prob") || !strcmp(tok, "futex"))
+    } else if (!strcmp(tok, "runnable")) {
+      if ((ok &= parse_double(tok, val, 0, 1, &d))) cfg_runnable = (int)d;
+    } else if (!strcmp(tok, "spinners")) {
+      if ((ok &= parse_double(tok, val, 0, 100, &d))) cfg_spinners = d / 100.0;
+    } else if (!strcmp(tok, "futex_prob") || !strcmp(tok, "futex"))
       ok &= parse_double(tok, val, 0, 1, &cfg_futex);
-    else if(!strcmp(tok, "futex_delay") || !strcmp(tok, "pause")) {
-      if((ok &= parse_double(tok, val, 1, MAX_HOLD_US, &d)))
-        cfg_pause_us = (unsigned)d;
-    } else if(!strcmp(tok, "warmup")) {
-      if((ok &= parse_double(tok, val, 0, 1e6, &d)))
-        cfg_warmup = (int)d;
-    } else if(!strcmp(tok, "abandon")) {
-      if((ok &= parse_double(tok, val, 1, 1e7, &d)))
-        cfg_abandon_ns = (int64_t)(d * 1e6);
-    } else if(!strcmp(tok, "log"))
+    else if (!strcmp(tok, "futex_delay") || !strcmp(tok, "pause")) {
+      if ((ok &= parse_double(tok, val, 1, MAX_HOLD_US, &d))) cfg_pause_us = (unsigned)d;
+    } else if (!strcmp(tok, "warmup")) {
+      if ((ok &= parse_double(tok, val, 0, 1e6, &d))) cfg_warmup = (int)d;
+    } else if (!strcmp(tok, "abandon")) {
+      if ((ok &= parse_double(tok, val, 1, 1e7, &d))) cfg_abandon_ns = (int64_t)(d * 1e6);
+    } else if (!strcmp(tok, "log"))
       snprintf(cfg_log, sizeof(cfg_log), "%s", val);
-    else if(!strcmp(tok, "seed"))
+    else if (!strcmp(tok, "seed"))
       ok &= (have_seed = parse_seed(val, &cfg_seed));
     else {
       fprintf(stderr, "SIGNAL_SHIM: unknown key '%s'\n", tok);
@@ -703,30 +657,29 @@ __attribute__((constructor)) static void signal_shim_init(void)
     }
   }
   free(copy);
-  if(cfg_hold_us > 0 && cfg_maxhold_us > 0) {
+  if (cfg_hold_us > 0 && cfg_maxhold_us > 0) {
     fprintf(stderr, "SIGNAL_SHIM: hold and maxhold are mutually exclusive\n");
     ok = 0;
   }
-  if(!ok) {
+  if (!ok) {
     /* refuse to run a misconfigured experiment silently */
     fprintf(stderr, "SIGNAL_SHIM: invalid configuration, aborting\n");
     abort();
   }
-  if(!have_seed)
-    cfg_seed = random_seed();
+  if (!have_seed) cfg_seed = random_seed();
   pthread_atfork(NULL, NULL, disable_in_child);
   atexit(report_summary);
 
-  if(cfg_rate > 0) {
+  if (cfg_rate > 0) {
     pause_signal = SIGRTMIN + 7;
-    if(pause_signal > SIGRTMAX) {
+    if (pause_signal > SIGRTMAX) {
       fprintf(stderr, "SIGNAL_SHIM: SIGRTMIN+7 exceeds SIGRTMAX\n");
       abort();
     }
     struct sigaction old;
-    if(sigaction(pause_signal, NULL, &old) != 0 ||
-       ((old.sa_flags & SA_SIGINFO) ? (old.sa_sigaction != NULL)
-                                    : (old.sa_handler != SIG_DFL))) {
+    if (sigaction(pause_signal, NULL, &old) != 0 ||
+        ((old.sa_flags & SA_SIGINFO) ? (old.sa_sigaction != NULL)
+                                     : (old.sa_handler != SIG_DFL))) {
       fprintf(stderr, "SIGNAL_SHIM: signal %d is already in use\n", pause_signal);
       abort();
     }
@@ -735,7 +688,7 @@ __attribute__((constructor)) static void signal_shim_init(void)
     act.sa_sigaction = pause_handler;
     act.sa_flags = SA_RESTART | SA_SIGINFO;
     sigemptyset(&act.sa_mask);
-    if(sigaction(pause_signal, &act, NULL) != 0) {
+    if (sigaction(pause_signal, &act, NULL) != 0) {
       perror("SIGNAL_SHIM: sigaction");
       abort();
     }
@@ -746,7 +699,7 @@ __attribute__((constructor)) static void signal_shim_init(void)
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     int err = pthread_create(&helper, &attr, helper_main, NULL);
     pthread_attr_destroy(&attr);
-    if(err) {
+    if (err) {
       fprintf(stderr, "SIGNAL_SHIM: pthread_create failed: %s\n", strerror(err));
       abort();
     }

@@ -47,28 +47,25 @@ struct Thread {
   long ngaps;
 };
 
-static int64_t now_ns(void)
-{
+static int64_t now_ns(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-static void *spin(void *arg)
-{
+static void *spin(void *arg) {
   struct Thread *t = arg;
   t->tid = syscall(SYS_gettid);
-  if(ncpus > 0) {
+  if (ncpus > 0) {
     cpu_set_t set;
     CPU_ZERO(&set);
-    for(int i = 0; i < ncpus; i++)
-      CPU_SET(i, &set);
+    for (int i = 0; i < ncpus; i++) CPU_SET(i, &set);
     sched_setaffinity(0, sizeof(set), &set);
   }
   int64_t last = now_ns();
-  while(last < deadline) {
+  while (last < deadline) {
     int64_t now = now_ns();
-    if(now - last > gap_ns && t->ngaps < MAX_GAPS) {
+    if (now - last > gap_ns && t->ngaps < MAX_GAPS) {
       t->gaps[t->ngaps][0] = last;
       t->gaps[t->ngaps][1] = now;
       t->ngaps++;
@@ -78,9 +75,8 @@ static void *spin(void *arg)
   return NULL;
 }
 
-int main(int argc, char **argv)
-{
-  if(argc != 5 && argc != 6) {
+int main(int argc, char **argv) {
+  if (argc != 5 && argc != 6) {
     fprintf(stderr, "usage: spinners NTHREADS SECONDS GAP_US OUTFILE [NCPUS]\n");
     return 2;
   }
@@ -90,15 +86,14 @@ int main(int argc, char **argv)
   struct Thread *threads = calloc(n, sizeof(*threads));
   /* start after a short delay so the tracer's warmup sees all threads */
   deadline = now_ns() + (int64_t)(atof(argv[2]) * 1e9);
-  for(int i = 0; i < n; i++) {
+  for (int i = 0; i < n; i++) {
     threads[i].gaps = malloc(sizeof(*threads[i].gaps) * MAX_GAPS);
     pthread_create(&threads[i].handle, NULL, spin, &threads[i]);
   }
-  for(int i = 0; i < n; i++)
-    pthread_join(threads[i].handle, NULL);
+  for (int i = 0; i < n; i++) pthread_join(threads[i].handle, NULL);
   FILE *out = fopen(argv[4], "w");
-  for(int i = 0; i < n; i++)
-    for(long j = 0; j < threads[i].ngaps; j++)
+  for (int i = 0; i < n; i++)
+    for (long j = 0; j < threads[i].ngaps; j++)
       fprintf(out, "%d %lld %lld\n", threads[i].tid, (long long)threads[i].gaps[j][0],
               (long long)threads[i].gaps[j][1]);
   fclose(out);
