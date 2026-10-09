@@ -427,7 +427,7 @@ def run_tests(
         gasnet_supernode_size = random.randint(0, 2)
         ucx_enable_shared_memory = bool(random.getrandbits(1))
         fuzzer = random.choice(fuzzers)
-        sidecar = random.choice(sidecars)
+        sidecar = random.choice(sidecars) if sidecars else None
 
         if launcher is not None and max_ranks is not None:
             ranks = generate_random(max_ranks)
