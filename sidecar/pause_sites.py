@@ -100,7 +100,7 @@ def main():
     )
     args = ap.parse_args()
 
-    stops = user = no_maps = 0
+    stops = user = no_maps = malformed = 0
     sites = collections.Counter()  # (library, offset) -> user-code stops
     top2 = []
     for d in args.dirs:
@@ -110,14 +110,19 @@ def main():
             per_tid = collections.Counter()
             for line in open(log, errors="replace"):
                 f = line.split()
-                if len(f) != 7:
+                try:
+                    if len(f) != 7:
+                        raise ValueError
+                    rip, syscall = int(f[5], 16), int(f[6])
+                except ValueError:
+                    malformed += 1  # e.g. the last line of a killed process
                     continue
                 stops += 1
                 per_tid[f[0]] += 1
-                if int(f[6]) >= 0:
+                if syscall >= 0:
                     continue  # in a system call
                 user += 1
-                site = lookup(ranges, int(f[5], 16)) if ranges else None
+                site = lookup(ranges, rip) if ranges else None
                 if site is None:
                     no_maps += 1
                     site = ("[unknown]", 0)
@@ -128,7 +133,7 @@ def main():
 
     print(
         f"pauses: {stops}, in user code: {100 * user / max(stops, 1):.1f}%"
-        f" ({no_maps} without a matching map)"
+        f" ({no_maps} without a matching map, {malformed} malformed lines skipped)"
     )
     if top2:
         print(
