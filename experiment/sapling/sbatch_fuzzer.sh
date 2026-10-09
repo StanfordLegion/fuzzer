@@ -30,6 +30,9 @@ IFS=":" read -ra fuzzer_exe <<< "$FUZZER_EXE"
 for f in "${fuzzer_exe[@]}"; do
     fuzzer_flags+=(
         --fuzzer="$f"
+        --sidecar=
+        --sidecar="$(dirname "$(dirname "$f")")"/sidecar/ptrace_shim
+        --sidecar="$(dirname "$(dirname "$f")")"/sidecar/signal_shim.so
     )
 done
 

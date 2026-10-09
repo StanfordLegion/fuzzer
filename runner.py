@@ -36,6 +36,7 @@ class FuzzArgs:
     ucx_enable_shared_memory: bool
     extra_args: list[str]
     fuzzer: str
+    sidecar: str
     launcher: str
     timelimit: str
     timeout_action: str
@@ -199,6 +200,14 @@ def run_fuzzer(args):
             cmd.extend(
                 ["/usr/bin/env", f"CUDA_VISIBLE_DEVICES={cuda_visible_devices(args)}"]
             )
+    if args.sidecar:
+        if args.sidecar.endswith(".so"):
+            # Library, set it up to LD_PRELOAD via /usr/bin/env so we don't
+            # install the sidecar on the job launcher itself.
+            cmd.extend(["/usr/bin/env", f"LD_PRELOAD={args.sidecar}"])
+        else:
+            # Regular executable, just run it.
+            cmd.extend([args.sidecar, "--"])
     cmd.extend(
         [
             args.fuzzer,
@@ -371,6 +380,7 @@ def run_tests(
     gpus_per_node,
     extra_args,
     fuzzers,
+    sidecars,
     launcher,
     max_ranks,
     timelimit,
@@ -417,6 +427,7 @@ def run_tests(
         gasnet_supernode_size = random.randint(0, 2)
         ucx_enable_shared_memory = bool(random.getrandbits(1))
         fuzzer = random.choice(fuzzers)
+        sidecar = random.choice(sidecars)
 
         if launcher is not None and max_ranks is not None:
             ranks = generate_random(max_ranks)
@@ -450,6 +461,7 @@ def run_tests(
                     ucx_enable_shared_memory=ucx_enable_shared_memory,
                     extra_args=extra_args,
                     fuzzer=fuzzer,
+                    sidecar=sidecar,
                     launcher=test_launcher,
                     timelimit=timelimit,
                     timeout_action=timeout_action,
@@ -590,6 +602,13 @@ def driver():
         default=[],
         dest="fuzzers",
         help="location of fuzzer executable(s)",
+    )
+    parser.add_argument(
+        "--sidecar",
+        action="append",
+        default=[],
+        dest="sidecars",
+        help="location of sidecar executables or libraries",
     )
     parser.add_argument("--launcher", help="launcher command")
     parser.add_argument(
