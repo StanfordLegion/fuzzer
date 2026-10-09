@@ -9,6 +9,11 @@ export REALM_BACKTRACE=1
 # UCX default spinlock is VERY slow under contention, switch to mutex
 export UCX_USE_MT_MUTEX=y
 
+# workaround for InfiniBand ODP bugs in this driver
+export GASNET_USE_ODP=0
+export UCX_IB_ODP_MEM_TYPES=
+export UCX_GGA_ODP_MEM_TYPES=
+
 # workaround for https://github.com/StanfordLegion/realm/issues/483
 export GASNET_EXITTIMEOUT_MIN=30
 
