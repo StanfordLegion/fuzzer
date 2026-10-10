@@ -353,16 +353,16 @@ def report_failure(proc):
     print(f"Captured failure: {shlex.join(fuzz_proc.args)}")
     if spy_proc is not None:
         # Legion Spy usually spews a lot, so we only want to capture the errors.
-        lines = spy_proc.stdout.decode("utf-8").splitlines()
+        lines = spy_proc.stdout.decode("utf-8", errors="replace").splitlines()
         for line in lines:
             if ("ERROR" in line) or ("WARNING" in line):
                 print(line)
-        print(spy_proc.stderr.decode("utf-8"))
+        print(spy_proc.stderr.decode("utf-8", errors="replace"))
     else:
         if fuzz_proc.stderr:
-            print(fuzz_proc.stderr.decode("utf-8"))
+            print(fuzz_proc.stderr.decode("utf-8", errors="replace"))
         else:
-            print(fuzz_proc.stdout.decode("utf-8"))
+            print(fuzz_proc.stdout.decode("utf-8", errors="replace"))
     print(flush=True)
 
 
